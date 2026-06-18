@@ -19,7 +19,7 @@ from datetime import datetime
 # 1. CONFIGURACIÓN ESTRUCTURAL DE LA INTERFAZ EJECUTIVA
 # =========================================================================
 st.set_page_config(
-    page_title="Ares Smart Inventory Core v9.0 — Enterprise Logistics",
+    page_title="Planificador de Inventarios y Reportes",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
