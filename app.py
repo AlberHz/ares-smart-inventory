@@ -17,16 +17,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Sistema de Control de Inventarios")
-st.write("Carga centralizada de datos para auditoría patrimonial y flujos financieros.")
+st.title("Dashboard (KPIS) de los Almacenes de Materia Prima y Suministros")
 
 st.markdown("---")
 
 col_a, col_b = st.columns(2)
 with col_a:
-    archivo_stock = st.file_uploader("Cargar Reporte Masivo de Stock Actual (.xlsx)", type=["xlsx"])
+    archivo_stock = st.file_uploader("Cargar archivo excel del Stock Actual (.xlsx)", type=["xlsx"])
 with col_b:
-    archivo_mov = st.file_uploader("Cargar Kardex Completo de Movimientos Históricos (.xlsx)", type=["xlsx"])
+    archivo_mov = st.file_uploader("Cargar archivo excel de todos los Movimientos de todos los almacenes (.xlsx)", type=["xlsx"])
 
 @st.cache_data
 def inicializar_pipeline(file_stock, file_mov):
@@ -54,3 +53,4 @@ if archivo_stock and archivo_mov:
     st.success("Bases de datos consolidadas en memoria. Proceda a utilizar los módulos financieros del panel lateral.")
 else:
     st.info("A la espera de reportes de origen para inicializar la sesión analítica.")
+    
