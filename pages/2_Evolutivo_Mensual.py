@@ -46,6 +46,8 @@ def estandarizar_columnas(df):
             mapeo[col] = 'Cantidad'
         elif col_clean_sin_tilde in ['TIPO_MOVIMIENTO', 'TIPO_MOV', 'TIPO', 'TIPO_OPERACION']:
             mapeo[col] = 'Tipo_Movimiento'
+        elif col_clean_sin_tilde in ['FECHA', 'FECHA_MOVIMIENTO', 'DATE']:
+            mapeo[col] = 'Fecha'
         elif col_clean_sin_tilde in ['MES_MOV', 'MES', 'PERIODO', 'FECHA_MES']:
             mapeo[col] = 'Mes_Mov'
             
@@ -54,7 +56,7 @@ def estandarizar_columnas(df):
 df_stock = estandarizar_columnas(st.session_state['df_stock'])
 df_mov = estandarizar_columnas(st.session_state['df_mov'])
 
-st.title("KPI 2 - Valorizaciòn del Inventario Mes a Mes - Cierres Mensuales")
+st.title("KPI 2 - Valorización del Inventario Mes a Mes - Cierres Mensuales")
 st.markdown("---")
 
 if 'Codigo' not in df_stock.columns or 'Codigo' not in df_mov.columns:
@@ -65,11 +67,16 @@ if 'Codigo' not in df_stock.columns or 'Codigo' not in df_mov.columns:
 df_stock['Codigo'] = df_stock['Codigo'].astype(str).str.strip().str.upper()
 df_mov['Codigo'] = df_mov['Codigo'].astype(str).str.strip().str.upper()
 
+# Derivar Mes_Mov desde Fecha si está disponible
+if 'Fecha' in df_mov.columns:
+    df_mov['Fecha_dt'] = pd.to_datetime(df_mov['Fecha'], errors='coerce')
+    df_mov['Mes_Mov'] = df_mov['Fecha_dt'].dt.strftime('%Y-%m')
+
 for col, val_default in [('Descripcion', 'SIN DESCRIPCIÓN'), ('Familia', 'SIN CLASIFICAR'), ('SubFamilia', 'GENERAL'), ('Almacen', 'GENERAL'), ('Um', 'UM'), ('Costo', 0.0), ('Stock', 0.0)]:
     if col not in df_stock.columns: df_stock[col] = val_default
     if col not in df_mov.columns: df_mov[col] = val_default
 
-for col, val_default in [('Cantidad', 0.0), ('Tipo_Movimiento', 'NI'), ('Mes_Mov', '2026-07')]:
+for col, val_default in [('Cantidad', 0.0), ('Tipo_Movimiento', 'NI'), ('Mes_Mov', '2026-08')]:
     if col not in df_mov.columns: df_mov[col] = val_default
 
 df_stock['Costo'] = pd.to_numeric(df_stock['Costo'], errors='coerce').fillna(0.0)
@@ -96,7 +103,7 @@ df_maestro_skus['Stock'] = df_maestro_skus['Stock'].fillna(0.0)
 st.sidebar.header("Parámetros")
 
 list_alm = ["TODOS"] + sorted(df_maestro_skus['Almacen'].dropna().unique().tolist())
-filtro_alm = st.sidebar.selectbox("Filtros", list_alm)
+filtro_alm = st.sidebar.selectbox("Filtros Almacén", list_alm)
 
 df_m_f = df_maestro_skus.copy()
 df_mov_f = df_mov.copy()
@@ -130,7 +137,8 @@ df_mov_f.loc[df_mov_f['Tipo_Movimiento'] == 'NS', 'Salidas'] = df_mov_f['Cantida
 df_mov_f['Es_Salida'] = 0
 df_mov_f.loc[df_mov_f['Tipo_Movimiento'] == 'NS', 'Es_Salida'] = 1
 
-meses_historicos = ["2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07"]
+# DETERMINACIÓN DINÁMICA DE MESES HISTÓRICOS
+meses_historicos = sorted(df_mov_f['Mes_Mov'].dropna().unique().tolist())
 
 costo_map = df_m_f.groupby('Codigo')['Costo'].mean().to_dict()
 desc_map = df_m_f.groupby('Codigo')['Descripcion'].first().to_dict()
@@ -202,6 +210,13 @@ df_evolutivo = pd.DataFrame(evolutivo_data)
 df_evolutivo['Variacion_Absoluta'] = df_evolutivo['Valorizado_Soles'].diff().fillna(0)
 df_evolutivo['Variacion_Porcentual'] = df_evolutivo['Valorizado_Soles'].pct_change().fillna(0) * 100
 
+# FUNCIÓN AUXILIAR DE FORMATO DE MONEDA (M / K)
+def formatear_monto(valor):
+    if abs(valor) >= 1_000_000:
+        return f"S/. {valor / 1_000_000:,.1f} M"
+    else:
+        return f"S/. {valor / 1_000:,.1f} K"
+
 # ==============================================================================
 # TARJETAS KPIS DE GERENCIA
 # ==============================================================================
@@ -213,19 +228,36 @@ idx_min_cap = df_evolutivo['Valorizado_Soles'].idxmin()
 mes_min_cap = df_evolutivo.loc[idx_min_cap, 'Mes']
 val_min_cap = df_evolutivo.loc[idx_min_cap, 'Valorizado_Soles']
 
-primer_cierre = df_evolutivo.iloc[0]['Valorizado_Soles']
+# Lógica YoY (Año Anterior) para Crecimiento Acumulado
+ultimo_mes = df_evolutivo.iloc[-1]['Mes']
 ultimo_cierre = df_evolutivo.iloc[-1]['Valorizado_Soles']
-var_acumulada_periodo = ((ultimo_cierre - primer_cierre) / primer_cierre * 100) if primer_cierre > 0 else 0
+
+# Buscar el mismo mes del año anterior
+partes = ultimo_mes.split('-')
+anio_ant = str(int(partes[0]) - 1)
+mes_ant_target = f"{anio_ant}-{partes[1]}"
+
+df_ano_ant = df_evolutivo[df_evolutivo['Mes'] == mes_ant_target]
+
+if not df_ano_ant.empty:
+    cierre_ref = df_ano_ant.iloc[0]['Valorizado_Soles']
+    etiqueta_ref = f"vs. {mes_ant_target} (YoY)"
+else:
+    # Si no existe el mes del año anterior exacto, compara con el primer mes disponible
+    cierre_ref = df_evolutivo.iloc[0]['Valorizado_Soles']
+    etiqueta_ref = f"vs. {df_evolutivo.iloc[0]['Mes']}"
+
+var_acumulada_periodo = ((ultimo_cierre - cierre_ref) / cierre_ref * 100) if cierre_ref > 0 else 0
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Pico Mínimo Capital", f"S/. {val_min_cap / 1000:,.1f} K", f"Mes: {mes_min_cap}")
-k2.metric("Pico Máximo Capital", f"S/. {val_max_cap / 1000:,.1f} K", f"Mes: {mes_max_cap}")
-k3.metric("Crecimiento Acumulado", f"{var_acumulada_periodo:+.2f}%", f"vs. {df_evolutivo.iloc[0]['Mes']}")
+k1.metric("Pico Mínimo Capital", formatear_monto(val_min_cap), f"Mes: {mes_min_cap}")
+k2.metric("Pico Máximo Capital", formatear_monto(val_max_cap), f"Mes: {mes_max_cap}")
+k3.metric("Crecimiento Acumulado", f"{var_acumulada_periodo:+.2f}%", etiqueta_ref)
 
 st.markdown("---")
 
 # ==============================================================================
-# GRÁFICO 1: TENDENCIA HISTÓRICA DE CAPITAL
+# GRÁFICO 1: TENDENCIA HISTÓRICA DE CAPITAL CON FORMATO EN M/K
 # ==============================================================================
 st.subheader("Tendencia de Cierre de Mes a Mes del Valor del Inventario Valorizado")
 
@@ -241,10 +273,11 @@ fig_cierre_puro.add_trace(go.Scatter(
 ))
 
 for idx, row in df_evolutivo.iterrows():
+    monto_fmt = formatear_monto(row['Valorizado_Soles'])
     fig_cierre_puro.add_annotation(
         x=row['Mes'],
         y=row['Valorizado_Soles'],
-        text=f"<b>S/. {row['Valorizado_Soles']/1000:,.0f}K</b>",
+        text=f"<b>{monto_fmt}</b>",
         showarrow=False,
         yshift=24,
         font=dict(color="#0f172a", size=11),
@@ -259,7 +292,7 @@ fig_cierre_puro.update_layout(
     yaxis=dict(title=dict(text="Capital Neto Custodia (S/.)"), gridcolor="#f1f5f9"),
     xaxis=dict(gridcolor="#f1f5f9"),
     plot_bgcolor="white",
-    height=380,
+    height=400,
     margin=dict(t=40, b=40, l=40, r=40)
 )
 st.plotly_chart(fig_cierre_puro, use_container_width=True)
@@ -277,7 +310,7 @@ if mediana_var > 0.5:
     detalle_eval = "La mayoría de meses presentan variaciones positivas sostenidas, indicando acumulación o aumento del valor del inventario."
 elif mediana_var < -0.5:
     evaluacion_tendencia = "DISMINUCIÓN PROGRESIVA (Optimización)"
-    detalle_eval = "La tendencia general apunta a la reducciòn del inventario y por lo tanto a la reducción de capital inmovilizado."
+    detalle_eval = "La tendencia general apunta a la reducción del inventario y por lo tanto a la reducción de capital inmovilizado."
 else:
     evaluacion_tendencia = "ESTABLE / NEUTRO"
     detalle_eval = "Las variaciones fluctuantes se compensan entre sí, manteniendo el stock en niveles estables."
@@ -319,7 +352,7 @@ st.info(f"💡 **Análisis de Tendencia:** Se detecta una conducta **{evaluacion
 # ==============================================================================
 st.markdown("---")
 st.subheader("Desglose por SKU por Cierre de Mes del Valor del Inventario Valorizado")
-mes_auditoria = st.selectbox("Seleccione el Mes para Auditar los codigos con Variación y Consumo:", meses_historicos, index=len(meses_historicos)-1)
+mes_auditoria = st.selectbox("Seleccione el Mes para Auditar los códigos con Variación y Consumo:", meses_historicos, index=len(meses_historicos)-1)
 
 auditoria_skus = []
 datos_mes_sel = saldos_por_mes_sku[mes_auditoria]
@@ -361,12 +394,11 @@ st.dataframe(
 )
 
 # ==============================================================================
-# 4. BUSCADOR DINÁMICO BLINDADO (SIN FALLOS DE SPLIT O HOVERTEMPLATE)
+# 4. BUSCADOR DINÁMICO BLINDADO
 # ==============================================================================
 st.markdown("---")
 st.subheader("Buscador Dinámico de Trazabilidad y Ubicación por SKU")
 
-# Construir diccionario de mapeo seguro clave-valor
 lista_codigos = sorted(df_m_f['Codigo'].unique().tolist())
 mapa_skus = {}
 opciones_combobox = []
@@ -384,7 +416,6 @@ if opciones_combobox:
     desc_seleccionada = desc_map.get(sku_seleccionado, "SIN DESCRIPCIÓN")
     um_seleccionada = um_map.get(sku_seleccionado, "UM")
     
-    # Detalle de Almacenes
     df_almacenes_sku = df_stock[df_stock['Codigo'] == sku_seleccionado].groupby('Almacen').agg(
         Stock_Almacen=('Stock', 'sum'),
         Costo_Promedio=('Costo', 'mean')
@@ -415,7 +446,6 @@ if opciones_combobox:
         else:
             st.warning("El código seleccionado no presenta stock activo en la foto del maestro.")
 
-    # Histórico del SKU individual seguro
     historial_sku = []
     for mes in meses_historicos:
         datos_mes_hist = saldos_por_mes_sku[mes].get(sku_seleccionado, {'Stock': 0.0, 'Costo': 0.0})
@@ -430,7 +460,6 @@ if opciones_combobox:
         
     df_historial_sku = pd.DataFrame(historial_sku)
     
-    # Gráfico limpio sin plantillas corruptas de hover
     fig_sku_line = go.Figure()
     fig_sku_line.add_trace(go.Scatter(
         x=df_historial_sku['Mes'], 
