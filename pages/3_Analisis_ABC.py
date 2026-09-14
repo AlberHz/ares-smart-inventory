@@ -50,42 +50,72 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# VALIDACIÓN Y PREPARACIÓN DE DATOS
+# VALIDACIÓN Y PREPARACIÓN DE DATOS CON ESTANDARIZACIÓN
 # ==============================================================================
 if 'df_stock' not in st.session_state or 'df_mov' not in st.session_state:
-    st.warning("Debe cargar los datos en el portal de inicio (app.py) para acceder a este módulo.")
+    st.warning("Debe cargar los datos en el portal de inicio para acceder a este módulo.")
     st.stop()
 
-df_stock = st.session_state['df_stock'].copy()
-df_mov = st.session_state['df_mov'].copy()
+def estandarizar_columnas(df):
+    df = df.copy()
+    mapeo = {}
+    for col in df.columns:
+        col_clean = str(col).strip().upper()
+        col_clean_sin_tilde = col_clean.replace('Ó', 'O').replace('Í', 'I').replace('Á', 'A').replace('É', 'E').replace('Ú', 'U')
+        
+        if col_clean_sin_tilde in ['CODIGO', 'SKU', 'MATERIAL', 'ARTICULO', 'CODIGO_MATERIAL', 'CODIGO MATERIAL']:
+            mapeo[col] = 'CODIGO'
+        elif col_clean_sin_tilde in ['DESCRIPCION', 'DESCRIPCION', 'PRODUCTO', 'DETALLE', 'MATERIAL_DESCRIPCION']:
+            mapeo[col] = 'DESCRIPCION'
+        elif col_clean_sin_tilde in ['ALMACEN', 'ALM', 'CENTRO', 'BODEGA']:
+            mapeo[col] = 'ALMACEN'
+        elif col_clean_sin_tilde in ['FAMILIA', 'CATEGORIA', 'LINEA']:
+            mapeo[col] = 'FAMILIA'
+        elif col_clean_sin_tilde in ['COSTO', 'COSTO_UNITARIO', 'COSTO UNITARIO', 'PRECIO']:
+            mapeo[col] = 'COSTO'
+        elif col_clean_sin_tilde in ['STOCK', 'CANTIDAD_STOCK', 'STOCK_ACTUAL', 'CANTIDAD_ACTUAL']:
+            mapeo[col] = 'STOCK'
+        elif col_clean_sin_tilde in ['TIPO_MOVIMIENTO', 'TIPO_MOV', 'TIPO', 'TIPO_OPERACION']:
+            mapeo[col] = 'TIPO_MOVIMIENTO'
+            
+    return df.rename(columns=mapeo)
+
+df_stock = estandarizar_columnas(st.session_state['df_stock'])
+df_mov = estandarizar_columnas(st.session_state['df_mov'])
 
 # Garantizar existencia de columnas clave
-for col in ['Almacen', 'Familia']:
+for col in ['ALMACEN', 'FAMILIA']:
     if col not in df_stock.columns:
         df_stock[col] = 'GENERAL'
     if col not in df_mov.columns:
         df_mov[col] = 'GENERAL'
 
-# Limpieza estandarizada de textos
-df_stock['Codigo'] = df_stock['Codigo'].astype(str).str.strip()
-df_stock['Almacen'] = df_stock['Almacen'].astype(str).str.strip()
-df_stock['Familia'] = df_stock['Familia'].astype(str).str.strip()
-df_stock['Descripcion'] = df_stock.get('Descripcion', df_stock.get('Item', 'PRODUCTO SIN DETALLE')).astype(str).str.strip()
+if 'DESCRIPCION' not in df_stock.columns:
+    df_stock['DESCRIPCION'] = 'PRODUCTO SIN DETALLE'
 
-df_mov['Codigo'] = df_mov['Codigo'].astype(str).str.strip()
-df_mov['Almacen'] = df_mov['Almacen'].astype(str).str.strip()
+# Limpieza estandarizada de textos
+df_stock['CODIGO'] = df_stock['CODIGO'].astype(str).str.strip().str.upper()
+df_stock['ALMACEN'] = df_stock['ALMACEN'].astype(str).str.strip().str.upper()
+df_stock['FAMILIA'] = df_stock['FAMILIA'].astype(str).str.strip().str.upper()
+df_stock['DESCRIPCION'] = df_stock['DESCRIPCION'].astype(str).str.strip()
+
+df_stock['STOCK'] = pd.to_numeric(df_stock['STOCK'], errors='coerce').fillna(0)
+df_stock['COSTO'] = pd.to_numeric(df_stock['COSTO'], errors='coerce').fillna(0)
+
+df_mov['CODIGO'] = df_mov['CODIGO'].astype(str).str.strip().str.upper()
+df_mov['ALMACEN'] = df_mov['ALMACEN'].astype(str).str.strip().str.upper()
 
 # ==============================================================================
 # MOTOR ABC: FRECUENCIA CRUZADA POR [CÓDIGO Y ALMACÉN]
 # ==============================================================================
-df_ns = df_mov[df_mov['Tipo_Movimiento'].astype(str).str.strip().str.upper() == 'NS']
-conteo_frecuencia = df_ns.groupby(['Codigo', 'Almacen']).size().reset_index(name='frecuencia_pedidos')
+df_ns = df_mov[df_mov['TIPO_MOVIMIENTO'].astype(str).str.strip().str.upper() == 'NS']
+conteo_frecuencia = df_ns.groupby(['CODIGO', 'ALMACEN']).size().reset_index(name='frecuencia_pedidos')
 
 # Cruce exacto de Stock y Frecuencia
-df_abc = df_stock[df_stock['Stock'] > 0].copy()
-df_abc = pd.merge(df_abc, conteo_frecuencia, on=['Codigo', 'Almacen'], how='left')
+df_abc = df_stock[df_stock['STOCK'] > 0].copy()
+df_abc = pd.merge(df_abc, conteo_frecuencia, on=['CODIGO', 'ALMACEN'], how='left')
 df_abc['frecuencia_pedidos'] = df_abc['frecuencia_pedidos'].fillna(0).astype(int)
-df_abc['valor_total'] = df_abc['Stock'] * df_abc['Costo']
+df_abc['valor_total'] = df_abc['STOCK'] * df_abc['COSTO']
 
 # Ordenamiento descendente y cálculo Pareto
 df_abc = df_abc.sort_values(by='frecuencia_pedidos', ascending=False).reset_index(drop=True)
@@ -118,13 +148,13 @@ def perfil_estrategico(row):
 df_abc['perfil_estrategico'] = df_abc.apply(perfil_estrategico, axis=1)
 
 # ==============================================================================
-# ENCABEZADO Y FILTROS GLOBALES SUPERIORES (ESTILO UNIFICADO)
+# ENCABEZADO Y FILTROS GLOBALES SUPERIORES
 # ==============================================================================
-st.markdown("<h1 style='color: #1e293b; font-weight: 800; font-size: 60px; margin-bottom: 2px;'>KPI 3 - CLASIFICACION ABC-(PARETO)</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='color: #1e293b; font-weight: 800; font-size: 36px; margin-bottom: 2px;'>KPI 3 - CLASIFICACIÓN ABC (PARETO)</h1>", unsafe_allow_html=True)
 st.markdown("<p style='color: #64748b; font-size: 14px; margin-bottom: 20px;'>Filtra y analiza la carga operativa y valorización de tu inventario.</p>", unsafe_allow_html=True)
 
-lista_almacenes = sorted(df_abc['Almacen'].unique().tolist())
-lista_familias = sorted(df_abc['Familia'].unique().tolist())
+lista_almacenes = sorted(df_abc['ALMACEN'].unique().tolist())
+lista_familias = sorted(df_abc['FAMILIA'].unique().tolist())
 
 with st.container():
     col_f1, col_f2, col_f3 = st.columns(3)
@@ -133,16 +163,16 @@ with st.container():
     with col_f2:
         familia_filtro = st.selectbox("FILTRO FAMILIA", ["TODAS LAS FAMILIAS"] + lista_familias)
     with col_f3:
-        abc_filtro = st.selectbox(" BLOQUE ABC", ["TODAS LAS CLASES", "🟥 CLASE A (80% Pedidos)", "🟨 CLASE B (15% Pedidos)", "🟩 CLASE C (5% Pedidos)"])
+        abc_filtro = st.selectbox("BLOQUE ABC", ["TODAS LAS CLASES", "🟥 CLASE A (80% Pedidos)", "🟨 CLASE B (15% Pedidos)", "🟩 CLASE C (5% Pedidos)"])
 
 # Aplicación de filtros interactivos
 df_filtrado = df_abc.copy()
 
 if almacen_filtro != "TODOS LOS ALMACENES":
-    df_filtrado = df_filtrado[df_filtrado['Almacen'] == almacen_filtro]
+    df_filtrado = df_filtrado[df_filtrado['ALMACEN'] == almacen_filtro]
 
 if familia_filtro != "TODAS LAS FAMILIAS":
-    df_filtrado = df_filtrado[df_filtrado['Familia'] == familia_filtro]
+    df_filtrado = df_filtrado[df_filtrado['FAMILIA'] == familia_filtro]
 
 if "CLASE A" in abc_filtro:
     df_filtrado = df_filtrado[df_filtrado['clasificacion_abc'] == 'A']
@@ -161,9 +191,9 @@ st.markdown("<div class='section-header'>Concentración de Inventario ABC por Ti
 cols_cards = st.columns(len(lista_almacenes) if len(lista_almacenes) > 0 else 1)
 
 for idx, nom_almacen in enumerate(lista_almacenes):
-    df_alm_kpi = df_abc[df_abc['Almacen'] == nom_almacen]
+    df_alm_kpi = df_abc[df_abc['ALMACEN'] == nom_almacen]
     if familia_filtro != "TODAS LAS FAMILIAS":
-        df_alm_kpi = df_alm_kpi[df_alm_kpi['Familia'] == familia_filtro]
+        df_alm_kpi = df_alm_kpi[df_alm_kpi['FAMILIA'] == familia_filtro]
         
     total_skus = len(df_alm_kpi)
     total_valor = df_alm_kpi['valor_total'].sum()
@@ -207,7 +237,7 @@ for idx, nom_almacen in enumerate(lista_almacenes):
 st.markdown("<br><br>", unsafe_allow_html=True)
 
 # ==============================================================================
-# PESTAÑAS PRINCIPALES (3 PESTAÑAS)
+# PESTAÑAS PRINCIPALES
 # ==============================================================================
 tabs = st.tabs([
     "CUADRO PARETO OPERATIVO", 
@@ -266,13 +296,13 @@ with tabs[0]:
     
     st.markdown("<br><hr style='border-color: #f1f5f9; margin: 20px 0;'>", unsafe_allow_html=True)
     
-    # 1. PARETO POR CARGA OPERATIVA (DESPACHOS)
+    # 1. PARETO POR CARGA OPERATIVA
     st.markdown("<div class='section-header'>Top 20 SKUs por Despachos</div>", unsafe_allow_html=True)
     
     top_20_ops = df_filtrado.sort_values(by='frecuencia_pedidos', ascending=False).head(20).copy()
     
     if not top_20_ops.empty:
-        top_20_ops['Codigo_Str'] = top_20_ops['Codigo'].astype(str)
+        top_20_ops['Codigo_Str'] = top_20_ops['CODIGO'].astype(str)
         colores_barras_ops = [colores_map.get(x, '#64748b') for x in top_20_ops['clasificacion_abc']]
         
         fig_pareto_ops = go.Figure()
@@ -284,7 +314,7 @@ with tabs[0]:
             text=top_20_ops['frecuencia_pedidos'].apply(lambda x: f"<b>{x:,} desp.</b>"),
             textposition='outside',
             textfont=dict(size=10, color="#0f172a"),
-            customdata=top_20_ops[['Codigo', 'Descripcion', 'Almacen', 'clasificacion_abc', 'valor_total']].values.tolist(),
+            customdata=top_20_ops[['CODIGO', 'DESCRIPCION', 'ALMACEN', 'clasificacion_abc', 'valor_total']].values.tolist(),
             hovertemplate="<b>SKU:</b> %{customdata[0]}<br><b>Descripción:</b> %{customdata[1]}<br><b>Almacén:</b> %{customdata[2]}<br><b>Clase:</b> %{customdata[3]}<br><b>Despachos:</b> %{y:,}<br><b>Valor Total:</b> S/. %{customdata[4]:,.2f}<extra></extra>"
         ))
         
@@ -307,7 +337,7 @@ with tabs[0]:
     top_20_val = df_filtrado.sort_values(by='valor_total', ascending=False).head(20).copy()
     
     if not top_20_val.empty:
-        top_20_val['Codigo_Str'] = top_20_val['Codigo'].astype(str)
+        top_20_val['Codigo_Str'] = top_20_val['CODIGO'].astype(str)
         colores_barras_val = [colores_map.get(x, '#64748b') for x in top_20_val['clasificacion_abc']]
         
         fig_pareto_val = go.Figure()
@@ -319,7 +349,7 @@ with tabs[0]:
             text=top_20_val['valor_total'].apply(lambda x: f"<b>S/. {x:,.0f}</b>"),
             textposition='outside',
             textfont=dict(size=10, color="#0f172a"),
-            customdata=top_20_val[['Codigo', 'Descripcion', 'Almacen', 'clasificacion_abc', 'frecuencia_pedidos']].values.tolist(),
+            customdata=top_20_val[['CODIGO', 'DESCRIPCION', 'ALMACEN', 'clasificacion_abc', 'frecuencia_pedidos']].values.tolist(),
             hovertemplate="<b>SKU:</b> %{customdata[0]}<br><b>Descripción:</b> %{customdata[1]}<br><b>Almacén:</b> %{customdata[2]}<br><b>Clase:</b> %{customdata[3]}<br><b>Valor Total:</b> S/. %{y:,.2f}<br><b>Despachos:</b> %{customdata[4]:,}<extra></extra>"
         ))
         
@@ -340,8 +370,8 @@ with tabs[0]:
 with tabs[1]:
     st.markdown("<div class='section-header'>Análisis de Pareto por Familias</div>", unsafe_allow_html=True)
     
-    mapa_familias = df_filtrado.groupby('Familia').agg(
-        skus=('Codigo', 'count'),
+    mapa_familias = df_filtrado.groupby('FAMILIA').agg(
+        skus=('CODIGO', 'count'),
         total_pedidos=('frecuencia_pedidos', 'sum'),
         valorizacion=('valor_total', 'sum'),
         conteoA=('clasificacion_abc', lambda x: (x == 'A').sum()),
@@ -352,13 +382,13 @@ with tabs[1]:
     if not mapa_familias.empty:
         fig_fam = go.Figure()
         fig_fam.add_trace(go.Bar(
-            x=mapa_familias['Familia'],
+            x=mapa_familias['FAMILIA'],
             y=mapa_familias['total_pedidos'],
             name="Despachos por Familia",
             marker_color="#6366f1",
             text=mapa_familias['total_pedidos'],
             textposition='outside',
-            textfont=dict(size=11, color="#4338ca", weight="bold"),
+            textfont=dict(size=11, color="#4338ca"),
             hovertemplate="<b>Familia:</b> %{x}<br><b>Despachos:</b> %{y}<extra></extra>"
         ))
         fig_fam.update_layout(plot_bgcolor="white", height=400, margin=dict(l=40, r=40, t=30, b=80), showlegend=False)
@@ -370,7 +400,7 @@ with tabs[1]:
     
     st.dataframe(
         mapa_familias.rename(columns={
-            'Familia': 'Familia Contable / Comercial',
+            'FAMILIA': 'Familia Contable / Comercial',
             'skus': 'Cant SKUs',
             'total_pedidos': 'Frecuencia Total Pedidos',
             'valorizacion': 'Capital Invertido (Stock)',
@@ -392,7 +422,7 @@ with tabs[1]:
 # PESTAÑA 3: LISTA DE PRODUCTOS
 # ------------------------------------------------------------------------------
 with tabs[2]:
-    st.markdown("<div class='section-header'>Catalogo de Codigos con Rotación</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>Catálogo de Códigos con Rotación</div>", unsafe_allow_html=True)
     
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -410,9 +440,13 @@ with tabs[2]:
     st.markdown("<br>", unsafe_allow_html=True)
     
     df_maestro_visual = df_filtrado[[
-        'clasificacion_abc', 'Codigo', 'Descripcion', 'Familia', 'Almacen', 'frecuencia_pedidos', 'valor_total', 'frecuencia_acumulada', 'perfil_estrategico'
+        'clasificacion_abc', 'CODIGO', 'DESCRIPCION', 'FAMILIA', 'ALMACEN', 'frecuencia_pedidos', 'valor_total', 'frecuencia_acumulada', 'perfil_estrategico'
     ]].rename(columns={
         'clasificacion_abc': 'Clase',
+        'CODIGO': 'Código',
+        'DESCRIPCION': 'Descripción',
+        'FAMILIA': 'Familia',
+        'ALMACEN': 'Almacén',
         'frecuencia_pedidos': 'Frec. Pedidos',
         'valor_total': 'Valor Stock',
         'frecuencia_acumulada': '% Acum. Pedidos',

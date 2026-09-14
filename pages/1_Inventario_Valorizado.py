@@ -9,7 +9,6 @@ st.set_page_config(
     page_icon="📦"
 )
 
-
 if 'df_stock' not in st.session_state:
     st.warning("Debe cargar los datos en el portal de inicio para acceder a este módulo.")
     st.stop()
@@ -25,42 +24,33 @@ st.markdown("---")
 st.sidebar.header("Filtros")
 
 # 1. Filtro Almacén
-list_alm = ["TODOS"] + sorted(df_stock['Almacen'].dropna().unique().tolist())
-filtro_alm = st.sidebar.selectbox("Filtro de Almacen", list_alm)
+list_alm = ["TODOS"] + sorted(df_stock['ALMACEN'].dropna().unique().tolist())
+filtro_alm = st.sidebar.selectbox("Filtro de Almacén", list_alm)
 
 # Filtrado inicial por Almacén
 df_step1 = df_stock.copy()
 if filtro_alm != "TODOS":
-    df_step1 = df_step1[df_step1['Almacen'] == filtro_alm]
+    df_step1 = df_step1[df_step1['ALMACEN'] == filtro_alm]
 
 # 2. Filtro Familia (Solo familias del Almacén seleccionado)
-list_fam = ["TODOS"] + sorted(df_step1['Familia'].dropna().unique().tolist())
+list_fam = ["TODOS"] + sorted(df_step1['FAMILIA'].dropna().unique().tolist())
 filtro_fam = st.sidebar.selectbox("Filtro de Familia", list_fam)
 
-# Filtrado secundario por Familia
-df_step2 = df_step1.copy()
-if filtro_fam != "TODOS" and filtro_fam in list_fam:
-    df_step2 = df_step2[df_step2['Familia'] == filtro_fam]
-
-# 3. Filtro Subfamilia (Solo subfamilias pertenecientes al Almacén y Familia seleccionados)
-list_subfam = ["TODOS"] + sorted(df_step2['SubFamilia'].dropna().unique().tolist())
-filtro_subfam = st.sidebar.selectbox("Filtro de Subfamilia", list_subfam)
-
 # DataFrame Final
-df_f = df_step2.copy()
-if filtro_subfam != "TODOS" and filtro_subfam in list_subfam:
-    df_f = df_f[df_f['SubFamilia'] == filtro_subfam]
+df_f = df_step1.copy()
+if filtro_fam != "TODOS" and filtro_fam in list_fam:
+    df_f = df_f[df_f['FAMILIA'] == filtro_fam]
 
 # ==============================================================================
 # KPIS PRINCIPALES
 # ==============================================================================
 total_capital = df_f['Valor_Total'].sum()
-total_unidades = df_f['Stock'].sum()
-total_skus = df_f['Codigo'].nunique() if 'Codigo' in df_f.columns else len(df_f)
+total_unidades = df_f['STOCK'].sum()
+total_skus = df_f['CODIGO'].nunique() if 'CODIGO' in df_f.columns else len(df_f)
 costo_promedio_unidad = total_capital / total_unidades if total_unidades > 0 else 0
 
 if not df_f.empty and 'Valor_Total' in df_f.columns:
-    col_sku_name = 'Descripcion' if 'Descripcion' in df_f.columns else 'Codigo'
+    col_sku_name = 'DESCRIPCIÓN' if 'DESCRIPCIÓN' in df_f.columns else ('DESCRIPCION' if 'DESCRIPCION' in df_f.columns else 'CODIGO')
     top_sku_row = df_f.sort_values(by='Valor_Total', ascending=False).iloc[0]
     top_sku_nombre = str(top_sku_row[col_sku_name])[:22] + "..." if len(str(top_sku_row[col_sku_name])) > 22 else str(top_sku_row[col_sku_name])
     top_sku_val = top_sku_row['Valor_Total']
@@ -83,14 +73,14 @@ cg1, cg2 = st.columns([4, 6])
 
 with cg1:
     st.subheader("Inventario Valorizado por Almacén")
-    df_g_alm = df_f.groupby('Almacen')['Valor_Total'].sum().reset_index()
+    df_g_alm = df_f.groupby('ALMACEN')['Valor_Total'].sum().reset_index()
     
     paleta_almacen = px.colors.qualitative.Dark24
     
     fig_alm = px.pie(
         df_g_alm, 
         values='Valor_Total', 
-        names='Almacen', 
+        names='ALMACEN', 
         hole=0.5,
         color_discrete_sequence=paleta_almacen
     )
@@ -108,9 +98,9 @@ with cg1:
 
 with cg2:
     st.subheader("Top 10 SKUs de Mayor Concentración de Capital")
-    col_prod = 'Descripcion' if 'Descripcion' in df_f.columns else ('Codigo' if 'Codigo' in df_f.columns else 'Familia')
+    col_prod = 'DESCRIPCIÓN' if 'DESCRIPCIÓN' in df_f.columns else ('DESCRIPCION' if 'DESCRIPCION' in df_f.columns else 'CODIGO')
     
-    df_top10 = df_f.groupby([col_prod, 'Familia'])['Valor_Total'].sum().reset_index()
+    df_top10 = df_f.groupby([col_prod, 'FAMILIA'])['Valor_Total'].sum().reset_index()
     df_top10 = df_top10.sort_values(by='Valor_Total', ascending=False).head(10)
     df_top10 = df_top10.sort_values(by='Valor_Total', ascending=True)
 
@@ -145,27 +135,16 @@ with cg2:
     st.plotly_chart(fig_top10, use_container_width=True)
 
 # ==============================================================================
-# BLOQUE 2: TREEMAP CON BOTÓN DE VISTA DINÁMICA DE PROFUNDIDAD
+# BLOQUE 2: TREEMAP DE CAPITAL POR ALMACÉN Y FAMILIA
 # ==============================================================================
 st.markdown("---")
-st.subheader("Desglose de Capital por almacèn y Familia")
+st.subheader("Desglose de Capital por Almacén y Familia")
 
-vista_jerarquia = st.radio(
-    "Nivel de desglose visual:",
-    options=["Almacén > Familia > SubFamilia", "Solo Almacén > Familia", "Solo Almacén > SubFamilia"],
-    horizontal=True
-)
+path_tree = ['ALMACEN', 'FAMILIA']
 
-if vista_jerarquia == "Solo Almacén > Familia":
-    path_tree = ['Almacen', 'Familia']
-elif vista_jerarquia == "Solo Almacén > SubFamilia":
-    path_tree = ['Almacen', 'SubFamilia']
-else:
-    path_tree = ['Almacen', 'Familia', 'SubFamilia']
-
-df_tree_data = df_f.groupby(list(set(path_tree))).agg(
+df_tree_data = df_f.groupby(path_tree).agg(
     Valor_Total=('Valor_Total', 'sum'),
-    Stock=('Stock', 'sum')
+    Stock=('STOCK', 'sum')
 ).reset_index()
 
 fig_tree = px.treemap(
@@ -192,91 +171,53 @@ fig_tree.update_layout(
 st.plotly_chart(fig_tree, use_container_width=True)
 
 # ==============================================================================
-# BLOQUE 3: FAMILIAS VS SUBFAMILIAS
+# BLOQUE 3: CONCENTRACIÓN POR FAMILIA
 # ==============================================================================
 st.markdown("---")
-st.subheader("Concentraciòn del Capital por Familia y Subfamilia")
+st.subheader("Concentración del Capital por Familia")
 
-col_fam, col_subfam = st.columns(2)
+df_g_fam = df_f.groupby('FAMILIA')['Valor_Total'].sum().reset_index().sort_values(by='Valor_Total', ascending=True)
+df_g_fam['Monto_Formateado'] = df_g_fam['Valor_Total'].apply(lambda x: f"S/. {x/1000:,.1f}K" if x>=1000 else f"S/. {x:,.0f}")
 
-with col_fam:
-    st.markdown("##### Concentración por Familia")
-    df_g_fam = df_f.groupby('Familia')['Valor_Total'].sum().reset_index().sort_values(by='Valor_Total', ascending=True)
-    df_g_fam['Monto_Formateado'] = df_g_fam['Valor_Total'].apply(lambda x: f"S/. {x/1000:,.1f}K" if x>=1000 else f"S/. {x:,.0f}")
+num_familias = len(df_g_fam)
+altura_fam = max(450, num_familias * 24)
+max_val_fam = df_g_fam['Valor_Total'].max() * 1.30 if not df_g_fam.empty else 100
 
-    num_familias = len(df_g_fam)
-    altura_fam = max(450, num_familias * 24)
-    max_val_fam = df_g_fam['Valor_Total'].max() * 1.30 if not df_g_fam.empty else 100
-
-    fig_fam = px.bar(
-        df_g_fam, 
-        x='Valor_Total', 
-        y='Familia', 
-        orientation='h',
-        text='Monto_Formateado',
-        color='Valor_Total', 
-        color_continuous_scale='emrld',
-        labels={'Valor_Total':''}
-    )
-    fig_fam.update_traces(
-        textposition='outside',
-        textfont=dict(size=11, color='black'),
-        hovertemplate="<b>Familia: %{y}</b><br>Monto: S/. %{x:,.2f}<extra></extra>"
-    )
-    fig_fam.update_layout(
-        coloraxis_showscale=False,
-        yaxis=dict(categoryorder='total ascending', type='category', dtick=1, tickfont=dict(size=10)),
-        xaxis=dict(showgrid=True, gridcolor='#f1f5f9', range=[0, max_val_fam]),
-        showlegend=False,
-        height=altura_fam,
-        margin=dict(l=150, r=110, t=10, b=20),
-        plot_bgcolor='white'
-    )
-    st.plotly_chart(fig_fam, use_container_width=True)
-
-with col_subfam:
-    st.markdown("##### Top 10 Subfamilias de Mayor Capital")
-    df_g_subfam = df_f.groupby('SubFamilia')['Valor_Total'].sum().reset_index()
-    df_g_subfam = df_g_subfam.sort_values(by='Valor_Total', ascending=False).head(10).sort_values(by='Valor_Total', ascending=True)
-    df_g_subfam['Monto_Formateado'] = df_g_subfam['Valor_Total'].apply(lambda x: f"S/. {x/1000:,.1f}K")
-
-    max_val_subfam = df_g_subfam['Valor_Total'].max() * 1.30 if not df_g_subfam.empty else 100
-
-    fig_subfam = px.bar(
-        df_g_subfam, 
-        x='Valor_Total', 
-        y='SubFamilia', 
-        orientation='h',
-        text='Monto_Formateado',
-        color='Valor_Total', 
-        color_continuous_scale='plasma',
-        labels={'Valor_Total':''}
-    )
-    fig_subfam.update_traces(
-        textposition='outside',
-        textfont=dict(size=11, color='black'),
-        hovertemplate="<b>Subfamilia: %{y}</b><br>Monto: S/. %{x:,.2f}<extra></extra>"
-    )
-    fig_subfam.update_layout(
-        coloraxis_showscale=False,
-        yaxis=dict(categoryorder='total ascending', type='category', dtick=1, tickfont=dict(size=11)),
-        xaxis=dict(showgrid=True, gridcolor='#f1f5f9', range=[0, max_val_subfam]),
-        showlegend=False,
-        height=altura_fam if num_familias <= 15 else 500,
-        margin=dict(l=160, r=110, t=10, b=20),
-        plot_bgcolor='white'
-    )
-    st.plotly_chart(fig_subfam, use_container_width=True)
+fig_fam = px.bar(
+    df_g_fam, 
+    x='Valor_Total', 
+    y='FAMILIA', 
+    orientation='h',
+    text='Monto_Formateado',
+    color='Valor_Total', 
+    color_continuous_scale='emrld',
+    labels={'Valor_Total':''}
+)
+fig_fam.update_traces(
+    textposition='outside',
+    textfont=dict(size=11, color='black'),
+    hovertemplate="<b>Familia: %{y}</b><br>Monto: S/. %{x:,.2f}<extra></extra>"
+)
+fig_fam.update_layout(
+    coloraxis_showscale=False,
+    yaxis=dict(categoryorder='total ascending', type='category', dtick=1, tickfont=dict(size=10)),
+    xaxis=dict(showgrid=True, gridcolor='#f1f5f9', range=[0, max_val_fam]),
+    showlegend=False,
+    height=altura_fam,
+    margin=dict(l=150, r=110, t=10, b=20),
+    plot_bgcolor='white'
+)
+st.plotly_chart(fig_fam, use_container_width=True)
 
 # ==============================================================================
 # MATRIZ TABULAR AVANZADA
 # ==============================================================================
 st.markdown("---")
-st.subheader("Matriz de Inversiòn Total")
+st.subheader("Matriz de Inversión Total")
 
-df_matriz = df_f.groupby(['Almacen', 'Familia', 'SubFamilia']).agg(
+df_matriz = df_f.groupby(['ALMACEN', 'FAMILIA']).agg(
     Cant_SKUs=('Valor_Total', 'count'),
-    Stock_Actual=('Stock', 'sum'),
+    Stock_Actual=('STOCK', 'sum'),
     Valor_Total_Soles=('Valor_Total', 'sum')
 ).reset_index()
 
@@ -302,7 +243,7 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
 processed_data = output.getvalue()
 
 st.download_button(
-    label="Descargar Matriz de Inversiòn Total a Excel",
+    label="Descargar Matriz de Inversión Total a Excel",
     data=processed_data,
     file_name="Matriz_Estructura_Inventario.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

@@ -11,7 +11,7 @@ import io
 # ==============================================================================
 st.set_page_config(
     layout="wide", 
-    page_title="KPI 4 - CODIGOS INMOVILIZADOS",
+    page_title="KPI 4 - CÓDIGOS INMOVILIZADOS",
     page_icon="📦"
 )
 
@@ -28,14 +28,14 @@ st.markdown("""
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     }
     .kpi-title {
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         font-weight: 700;
         color: #64748b;
         text-transform: uppercase;
         margin-bottom: 6px;
     }
     .kpi-value {
-        font-size: 1.4rem;
+        font-size: 1.3rem;
         font-weight: 800;
         color: #0f172a;
     }
@@ -52,16 +52,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# FUNCIONES AUXILIARES VECTORIZADAS
+# FUNCIONES DE LIMPIEZA Y ESTANDARIZACIÓN
 # ==============================================================================
-def buscar_columna(df, opciones_posibles, defecto=""):
-    for op in opciones_posibles:
-        for col in df.columns:
-            col_norm = str(col).lower().replace('_', ' ').replace('á','a').replace('é','e').replace('í','i').replace('ó','o').replace('ú','u').strip()
-            if op.lower() in col_norm:
-                return col
-    return defecto
-
 def sanitizar_serie_numerica(serie):
     if serie is None or serie.empty:
         return pd.Series(dtype=float)
@@ -76,78 +68,106 @@ def sanitizar_serie_numerica(serie):
         .fillna(0.0)
     )
 
+def estandarizar_columnas(df):
+    df = df.copy()
+    mapeo = {}
+    for col in df.columns:
+        col_clean = str(col).strip().upper()
+        col_clean_sin_tilde = col_clean.replace('Ó', 'O').replace('Í', 'I').replace('Á', 'A').replace('É', 'E').replace('Ú', 'U')
+        
+        if col_clean_sin_tilde in ['CODIGO', 'SKU', 'MATERIAL', 'ARTICULO', 'CODIGO_MATERIAL', 'CODIGO MATERIAL', 'ITEM']:
+            mapeo[col] = 'CODIGO'
+        elif col_clean_sin_tilde in ['DESCRIPCION', 'PRODUCTO', 'DETALLE', 'MATERIAL_DESCRIPCION', 'NOMBRE']:
+            mapeo[col] = 'DESCRIPCION'
+        elif col_clean_sin_tilde in ['ALMACEN', 'ALM', 'CENTRO', 'BODEGA', 'DEPOSITO', 'NOMALMACEN']:
+            mapeo[col] = 'ALMACEN'
+        elif col_clean_sin_tilde in ['FAMILIA', 'CATEGORIA', 'LINEA']:
+            mapeo[col] = 'FAMILIA'
+        elif col_clean_sin_tilde in ['SUBFAMILIA', 'SUBCATEGORIA', 'SUBLINEA']:
+            mapeo[col] = 'SUBFAMILIA'
+        elif col_clean_sin_tilde in ['COSTO', 'COSTO_UNITARIO', 'COSTO UNITARIO', 'PRECIO', 'VAL UNIT']:
+            mapeo[col] = 'COSTO'
+        elif col_clean_sin_tilde in ['STOCK', 'CANTIDAD_STOCK', 'STOCK_ACTUAL', 'CANTIDAD_ACTUAL', 'CANTIDAD', 'SALDO']:
+            mapeo[col] = 'STOCK'
+        elif col_clean_sin_tilde in ['TIPO_MOVIMIENTO', 'TIPO_MOV', 'TIPO', 'TIPO_OPERACION', 'TIPO DOC', 'DOCUMENTO', 'MOVIMIENTO']:
+            mapeo[col] = 'TIPO_MOVIMIENTO'
+        elif col_clean_sin_tilde in ['TRANSACCION', 'TRANS', 'TIPO TRANSACCION', 'TIPO_TRANSACCION']:
+            mapeo[col] = 'TRANSACCION'
+        elif col_clean_sin_tilde in ['FECHA', 'FEC DOC', 'FEC MOV', 'FECHA_MOVIMIENTO']:
+            mapeo[col] = 'FECHA'
+            
+    return df.rename(columns=mapeo)
+
 # ==============================================================================
-# 1. CARGA Y LIMPIEZA DE DATOS (SOLO STOCK > 0)
+# 1. CARGA Y PREPARACIÓN DE DATOS
 # ==============================================================================
 if 'df_stock' not in st.session_state or 'df_mov' not in st.session_state:
     st.warning("⚠️ Debe cargar los datos en el portal de inicio para acceder a este módulo.")
     st.stop()
 
-df_stock_raw = st.session_state['df_stock']
-df_mov_raw = st.session_state['df_mov']
+df_stock_raw = estandarizar_columnas(st.session_state['df_stock'])
+df_mov_raw = estandarizar_columnas(st.session_state['df_mov'])
 
-col_cod_s = buscar_columna(df_stock_raw, ['codigo', 'item', 'sku', 'articulo'])
-col_desc_s = buscar_columna(df_stock_raw, ['descripcion', 'detalle', 'nombre', 'producto'])
-col_alm_s = buscar_columna(df_stock_raw, ['almacen', 'deposito', 'nomalmacen'])
-col_fam_s = buscar_columna(df_stock_raw, ['familia', 'linea', 'categoria'])
-col_subfam_s = buscar_columna(df_stock_raw, ['subfamilia', 'sublinea', 'subcategoria'])
-col_stk_s = buscar_columna(df_stock_raw, ['stock', 'cantidad', 'cant', 'saldo'])
-col_costo_s = buscar_columna(df_stock_raw, ['costo', 'precio', 'val unit'])
+# Asegurar existencia de columnas necesarias
+for c in ['CODIGO', 'DESCRIPCION', 'ALMACEN', 'FAMILIA', 'SUBFAMILIA', 'STOCK', 'COSTO']:
+    if c not in df_stock_raw.columns:
+        if c == 'DESCRIPCION': df_stock_raw[c] = 'SIN DESCRIPCIÓN'
+        elif c in ['ALMACEN', 'FAMILIA', 'SUBFAMILIA']: df_stock_raw[c] = 'GENERAL'
+        else: df_stock_raw[c] = 0
+
+for c in ['CODIGO', 'TIPO_MOVIMIENTO', 'TRANSACCION', 'FECHA']:
+    if c not in df_mov_raw.columns:
+        df_mov_raw[c] = ''
 
 df_stock_base = pd.DataFrame({
-    'Codigo': df_stock_raw[col_cod_s].astype(str).str.strip() if col_cod_s else df_stock_raw.iloc[:, 0].astype(str).str.strip(),
-    'Descripcion': df_stock_raw[col_desc_s].astype(str).str.strip() if col_desc_s else 'SIN DESCRIPCIÓN',
-    'Almacen': df_stock_raw[col_alm_s].astype(str).str.strip().str.upper() if col_alm_s else 'GENERAL',
-    'Familia': df_stock_raw[col_fam_s].astype(str).str.strip().str.upper() if col_fam_s else 'GENERAL',
-    'SubFamilia': df_stock_raw[col_subfam_s].astype(str).str.strip().str.upper() if col_subfam_s else 'GENERAL',
-    'Stock': sanitizar_serie_numerica(df_stock_raw[col_stk_s]) if col_stk_s else 0.0,
-    'Costo': sanitizar_serie_numerica(df_stock_raw[col_costo_s]) if col_costo_s else 0.0
+    'CODIGO': df_stock_raw['CODIGO'].astype(str).str.strip().str.upper(),
+    'DESCRIPCION': df_stock_raw['DESCRIPCION'].astype(str).str.strip(),
+    'ALMACEN': df_stock_raw['ALMACEN'].astype(str).str.strip().str.upper(),
+    'FAMILIA': df_stock_raw['FAMILIA'].astype(str).str.strip().str.upper(),
+    'SUBFAMILIA': df_stock_raw['SUBFAMILIA'].astype(str).str.strip().str.upper(),
+    'STOCK': sanitizar_serie_numerica(df_stock_raw['STOCK']),
+    'COSTO': sanitizar_serie_numerica(df_stock_raw['COSTO'])
 })
 
 # FILTRO CLAVE: Únicamente considerar SKUs con Stock Físico > 0
-df_stock = df_stock_base[df_stock_base['Stock'] > 0].copy()
-
-col_cod_m = buscar_columna(df_mov_raw, ['codigo', 'item', 'sku', 'articulo'])
-col_tipo_m = buscar_columna(df_mov_raw, ['tipo movimiento', 'tipo doc', 'documento', 'movimiento', 'tipo'])
-col_trans_m = buscar_columna(df_mov_raw, ['transaccion', 'trans', 'tipo transaccion'])
-col_fec_m = buscar_columna(df_mov_raw, ['fecha', 'fec doc', 'fec mov'])
+df_stock = df_stock_base[df_stock_base['STOCK'] > 0].copy()
 
 df_mov = pd.DataFrame({
-    'Codigo': df_mov_raw[col_cod_m].astype(str).str.strip() if col_cod_m else '',
-    'Tipo_Movimiento': df_mov_raw[col_tipo_m].astype(str).str.strip().str.upper() if col_tipo_m else '',
-    'Transaccion': df_mov_raw[col_trans_m].astype(str).str.strip().str.upper() if col_trans_m else '',
-    'Fecha': pd.to_datetime(df_mov_raw[col_fec_m], errors='coerce') if col_fec_m else pd.NaT
+    'CODIGO': df_mov_raw['CODIGO'].astype(str).str.strip().str.upper(),
+    'TIPO_MOVIMIENTO': df_mov_raw['TIPO_MOVIMIENTO'].astype(str).str.strip().str.upper(),
+    'TRANSACCION': df_mov_raw['TRANSACCION'].astype(str).str.strip().str.upper(),
+    'FECHA': pd.to_datetime(df_mov_raw['FECHA'], errors='coerce')
 })
 
 # ==============================================================================
-# 2. LOGICA REGLA TD EN MATERIA PRIMA VS NI/NS
+# 2. LÓGICA REGLA TD EN MATERIA PRIMA VS NI/NS
 # ==============================================================================
-ref_almacen = df_stock.drop_duplicates('Codigo').set_index('Codigo')['Almacen'].to_dict()
-ref_familia = df_stock.drop_duplicates('Codigo').set_index('Codigo')['Familia'].to_dict()
+ref_almacen = df_stock.drop_duplicates('CODIGO').set_index('CODIGO')['ALMACEN'].to_dict()
+ref_familia = df_stock.drop_duplicates('CODIGO').set_index('CODIGO')['FAMILIA'].to_dict()
 
-df_mov['Almacen_Ref'] = df_mov['Codigo'].map(ref_almacen).fillna('')
-df_mov['Familia_Ref'] = df_mov['Codigo'].map(ref_familia).fillna('')
+df_mov['Almacen_Ref'] = df_mov['CODIGO'].map(ref_almacen).fillna('')
+df_mov['Familia_Ref'] = df_mov['CODIGO'].map(ref_familia).fillna('')
 
 df_mov['es_mp'] = (
     df_mov['Almacen_Ref'].str.contains('MATERIA|MP|PRIMA', regex=True, na=False) |
     df_mov['Familia_Ref'].str.contains('MATERIA|MP|PRIMA', regex=True, na=False)
 )
 
-df_mov['es_ingreso'] = df_mov['Tipo_Movimiento'].str.contains('NI|INGRESO', regex=True, na=False)
+df_mov['es_ingreso'] = df_mov['TIPO_MOVIMIENTO'].str.contains('NI|INGRESO', regex=True, na=False)
 
-salida_mp = df_mov['es_mp'] & df_mov['Transaccion'].str.contains('TD', regex=True, na=False)
-salida_otros = (~df_mov['es_mp']) & df_mov['Tipo_Movimiento'].str.contains('NS|SALIDA', regex=True, na=False)
+salida_mp = df_mov['es_mp'] & df_mov['TRANSACCION'].str.contains('TD', regex=True, na=False)
+salida_otros = (~df_mov['es_mp']) & df_mov['TIPO_MOVIMIENTO'].str.contains('NS|SALIDA', regex=True, na=False)
 df_mov['es_salida'] = salida_mp | salida_otros
 
 # ==============================================================================
-# 3. MOTOR VECTORIZADO DE CALCULOS DE GAPS
+# 3. MOTOR VECTORIZADO DE CÁLCULOS DE GAPS
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def calcular_gaps_vectorizado(df_s, df_m):
     base = df_s.copy()
     fecha_hoy = pd.Timestamp(datetime.date.today())
     
-    m_valid = df_m[(df_m['es_ingreso'] | df_m['es_salida']) & df_m['Fecha'].notnull()]
+    m_valid = df_m[(df_m['es_ingreso'] | df_m['es_salida']) & df_m['FECHA'].notnull()]
     
     if m_valid.empty:
         base['f_ult_ingreso'] = pd.NaT
@@ -157,16 +177,16 @@ def calcular_gaps_vectorizado(df_s, df_m):
         base['gap_efectivo'] = 999
         base['es_espejismo'] = False
     else:
-        s_ingresos = m_valid[m_valid['es_ingreso']].groupby('Codigo')['Fecha'].max()
-        s_salidas = m_valid[m_valid['es_salida']].groupby('Codigo')['Fecha'].max()
+        s_ingresos = m_valid[m_valid['es_ingreso']].groupby('CODIGO')['FECHA'].max()
+        s_salidas = m_valid[m_valid['es_salida']].groupby('CODIGO')['FECHA'].max()
         
-        m_sorted = m_valid.sort_values(['Codigo', 'Fecha'])
-        m_sorted['gap'] = m_sorted.groupby('Codigo')['Fecha'].diff().dt.days
-        s_max_gap = m_sorted.groupby('Codigo')['gap'].max().fillna(0)
+        m_sorted = m_valid.sort_values(['CODIGO', 'FECHA'])
+        m_sorted['gap'] = m_sorted.groupby('CODIGO')['FECHA'].diff().dt.days
+        s_max_gap = m_sorted.groupby('CODIGO')['gap'].max().fillna(0)
         
-        base['f_ult_ingreso'] = base['Codigo'].map(s_ingresos)
-        base['f_ult_salida'] = base['Codigo'].map(s_salidas)
-        base['max_gap_historico'] = base['Codigo'].map(s_max_gap).fillna(0)
+        base['f_ult_ingreso'] = base['CODIGO'].map(s_ingresos)
+        base['f_ult_salida'] = base['CODIGO'].map(s_salidas)
+        base['max_gap_historico'] = base['CODIGO'].map(s_max_gap).fillna(0)
         
         f_ref = base['f_ult_salida'].combine_first(base['f_ult_ingreso'])
         dias_inact = (fecha_hoy - f_ref).dt.days
@@ -191,7 +211,7 @@ def calcular_gaps_vectorizado(df_s, df_m):
         '6 a 9 Meses (Rotación Baja / Riesgo)'
     ]
     base['tramo_rotacion'] = np.select(conds, choices, default='9 a Más Meses (Inmovilizado Crítico)')
-    base['capital_total'] = base['Stock'] * base['Costo']
+    base['capital_total'] = base['STOCK'] * base['COSTO']
     
     return base
 
@@ -217,8 +237,8 @@ colores_tramos = {
 st.title("KPI 4 - ANÁLISIS DE PRODUCTOS INMOVILIZADOS")
 st.markdown("---")
 
-lista_almacenes = ["TODOS"] + sorted([x for x in df_datos_maestros['Almacen'].unique() if x and str(x) != 'nan'])
-lista_familias = ["TODAS"] + sorted([x for x in df_datos_maestros['Familia'].unique() if x and str(x) != 'nan'])
+lista_almacenes = ["TODOS"] + sorted([x for x in df_datos_maestros['ALMACEN'].unique() if x and str(x) != 'nan'])
+lista_familias = ["TODAS"] + sorted([x for x in df_datos_maestros['FAMILIA'].unique() if x and str(x) != 'nan'])
 
 f_col1, f_col2, f_col3, f_col4 = st.columns(4)
 with f_col1: almacen_filtro = st.selectbox("Almacén", lista_almacenes)
@@ -226,8 +246,8 @@ with f_col2: familia_filtro = st.selectbox("Familia", lista_familias)
 
 df_prev_sub = df_datos_maestros.copy()
 if familia_filtro != "TODAS": 
-    df_prev_sub = df_prev_sub[df_prev_sub['Familia'] == familia_filtro]
-lista_subfamilias = ["TODAS"] + sorted([x for x in df_prev_sub['SubFamilia'].unique() if x and str(x) != 'nan'])
+    df_prev_sub = df_prev_sub[df_prev_sub['FAMILIA'] == familia_filtro]
+lista_subfamilias = ["TODAS"] + sorted([x for x in df_prev_sub['SUBFAMILIA'].unique() if x and str(x) != 'nan'])
 
 with f_col3: subfamilia_filtro = st.selectbox("Subfamilia", lista_subfamilias)
 with f_col4: tramo_filtro = st.selectbox("Rotación", ["TODOS"] + orden_tramos)
@@ -235,52 +255,69 @@ with f_col4: tramo_filtro = st.selectbox("Rotación", ["TODOS"] + orden_tramos)
 # Aplicar filtros
 df_filtrado = df_datos_maestros.copy()
 if almacen_filtro != "TODOS": 
-    df_filtrado = df_filtrado[df_filtrado['Almacen'] == almacen_filtro]
+    df_filtrado = df_filtrado[df_filtrado['ALMACEN'] == almacen_filtro]
 if familia_filtro != "TODAS": 
-    df_filtrado = df_filtrado[df_filtrado['Familia'] == familia_filtro]
+    df_filtrado = df_filtrado[df_filtrado['FAMILIA'] == familia_filtro]
 if subfamilia_filtro != "TODAS": 
-    df_filtrado = df_filtrado[df_filtrado['SubFamilia'] == subfamilia_filtro]
+    df_filtrado = df_filtrado[df_filtrado['SUBFAMILIA'] == subfamilia_filtro]
 if tramo_filtro != "TODOS": 
     df_filtrado = df_filtrado[df_filtrado['tramo_rotacion'] == tramo_filtro]
 
 # ==============================================================================
-# 5. KPIS EJECUTIVOS
+# 5. KPIS EJECUTIVOS (5 TARJETAS)
 # ==============================================================================
 v_total = df_filtrado['capital_total'].sum()
 cant_skus = len(df_filtrado)
+
 v_critico = df_filtrado[df_filtrado['tramo_rotacion'] == '9 a Más Meses (Inmovilizado Crítico)']['capital_total'].sum()
 v_riesgo = df_filtrado[df_filtrado['tramo_rotacion'] == '6 a 9 Meses (Rotación Baja / Riesgo)']['capital_total'].sum()
+v_media = df_filtrado[df_filtrado['tramo_rotacion'] == '3 a 6 Meses (Rotación Media)']['capital_total'].sum()
+v_activa = df_filtrado[df_filtrado['tramo_rotacion'] == '1 a 3 Meses (Rotación Activa)']['capital_total'].sum()
+
 pct_critico = (v_critico / v_total * 100) if v_total > 0 else 0
 
-k1, k2, k3, k4 = st.columns(4)
+k1, k2, k3, k4, k5 = st.columns(5)
+
 with k1:
     st.markdown(f"""
     <div class='kpi-card'>
         <div class='kpi-title'>Capital Total Filtrado</div>
         <div class='kpi-value'>S/. {v_total:,.2f}</div>
+        <div style='font-size:0.8rem; color:#64748b;'>{cant_skus:,} SKUs en Total</div>
     </div>
     """, unsafe_allow_html=True)
+
 with k2:
     st.markdown(f"""
     <div class='kpi-card'>
-        <div class='kpi-title'>Inmovilizado Crítico (> 9 Meses)</div>
+        <div class='kpi-title'>Inmovilizado Crítico (> 9M)</div>
         <div class='kpi-value' style='color:#b91c1c;'>S/. {v_critico:,.2f}</div>
         <div style='font-size:0.8rem; color:#e11d48;'>{pct_critico:.1f}% del Capital Actual</div>
     </div>
     """, unsafe_allow_html=True)
+
 with k3:
     st.markdown(f"""
     <div class='kpi-card'>
-        <div class='kpi-title'>Riesgo Próximo (6 a 9 Meses)</div>
+        <div class='kpi-title'>Riesgo Próximo (6 a 9M)</div>
         <div class='kpi-value' style='color:#f97316;'>S/. {v_riesgo:,.2f}</div>
         <div style='font-size:0.8rem; color:#d97706;'>Futuro inmovilizado si no se liquida</div>
     </div>
     """, unsafe_allow_html=True)
+
 with k4:
-    v_activa = df_filtrado[df_filtrado['tramo_rotacion'] == '1 a 3 Meses (Rotación Activa)']['capital_total'].sum()
     st.markdown(f"""
     <div class='kpi-card'>
-        <div class='kpi-title'>Rotación Activa (1-3 Meses)</div>
+        <div class='kpi-title'>Rotación Media (3 a 6M)</div>
+        <div class='kpi-value' style='color:#f59e0b;'>S/. {v_media:,.2f}</div>
+        <div style='font-size:0.8rem; color:#b45309;'>Bajo monitoreo de consumo</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with k5:
+    st.markdown(f"""
+    <div class='kpi-card'>
+        <div class='kpi-title'>Rotación Activa (1 a 3M)</div>
         <div class='kpi-value' style='color:#10b981;'>S/. {v_activa:,.2f}</div>
         <div style='font-size:0.8rem; color:#64748b;'>Capital con flujo constante</div>
     </div>
@@ -298,17 +335,17 @@ tab_alm, tab_top15, tab_tabla = st.tabs([
 ])
 
 # ------------------------------------------------------------------------------
-# TAB 1: MATRIZ CONSOLIDADA POR ALMACÉN (SKUS + MONTO S/.)
+# TAB 1: MATRIZ CONSOLIDADA POR ALMACÉN
 # ------------------------------------------------------------------------------
 with tab_alm:
     st.markdown("<div class='section-header'>ROTACIÓN DE CAPITAL POR ALMACÉN</div>", unsafe_allow_html=True)
     
-    df_chart_alm = df_filtrado.groupby(['Almacen', 'tramo_rotacion'])['capital_total'].sum().reset_index()
+    df_chart_alm = df_filtrado.groupby(['ALMACEN', 'tramo_rotacion'])['capital_total'].sum().reset_index()
     
     if not df_chart_alm.empty:
         fig_alm_stacked = px.bar(
             df_chart_alm, 
-            y='Almacen', 
+            y='ALMACEN', 
             x='capital_total', 
             color='tramo_rotacion', 
             orientation='h',
@@ -324,19 +361,18 @@ with tab_alm:
         )
         st.plotly_chart(fig_alm_stacked, use_container_width=True)
     
-    st.markdown("<div class='section-header'>MATRIZ DETALLA DE INMOVILIZADOS</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>MATRIZ DETALLADA DE INMOVILIZADOS</div>", unsafe_allow_html=True)
     
-    # Pivots
     pivot_capital = df_filtrado.pivot_table(
-        index='Almacen', columns='tramo_rotacion', values='capital_total', aggfunc='sum', fill_value=0
+        index='ALMACEN', columns='tramo_rotacion', values='capital_total', aggfunc='sum', fill_value=0
     ).reindex(columns=orden_tramos, fill_value=0)
     
     pivot_skus = df_filtrado.pivot_table(
-        index='Almacen', columns='tramo_rotacion', values='Codigo', aggfunc='nunique', fill_value=0
+        index='ALMACEN', columns='tramo_rotacion', values='CODIGO', aggfunc='nunique', fill_value=0
     ).reindex(columns=orden_tramos, fill_value=0)
     
-    skus_totales = df_filtrado.groupby('Almacen')['Codigo'].nunique().rename('SKUs Con Stock (>0)')
-    capital_tot = df_filtrado.groupby('Almacen')['capital_total'].sum().rename('Capital Total (S/.)')
+    skus_totales = df_filtrado.groupby('ALMACEN')['CODIGO'].nunique().rename('SKUs Con Stock (>0)')
+    capital_tot = df_filtrado.groupby('ALMACEN')['capital_total'].sum().rename('Capital Total (S/.)')
     
     df_matriz_alm = pd.concat([
         skus_totales,
@@ -351,7 +387,6 @@ with tab_alm:
         pivot_capital['9 a Más Meses (Inmovilizado Crítico)'].rename('Capital Inmovilizado (S/.)')
     ], axis=1).fillna(0).reset_index()
     
-    # Porcentajes
     df_matriz_alm['% Inmovilizado (>9M)'] = np.where(
         df_matriz_alm['Capital Total (S/.)'] > 0,
         (df_matriz_alm['Capital Inmovilizado (S/.)'] / df_matriz_alm['Capital Total (S/.)']) * 100, 0
@@ -363,7 +398,6 @@ with tab_alm:
     
     df_matriz_alm = df_matriz_alm.sort_values(by='Capital Total (S/.)', ascending=False)
     
-    # Formateo eficiente
     df_matriz_view = df_matriz_alm.copy()
     df_matriz_view['Capital Total (S/.)'] = df_matriz_view['Capital Total (S/.)'].map('S/. {:,.2f}'.format)
     df_matriz_view['Capital Activo (S/.)'] = df_matriz_view['Capital Activo (S/.)'].map('S/. {:,.2f}'.format)
@@ -379,8 +413,6 @@ with tab_alm:
 # TAB 2: TOP 15s VERTICALES
 # ------------------------------------------------------------------------------
 with tab_top15:
-    
-    # 1. TOP 15 SKUs
     st.markdown("<div class='section-header'>TOP 15 SKUs con Mayor Capital Valorizado</div>", unsafe_allow_html=True)
     df_top_sku = df_filtrado.sort_values(by='capital_total', ascending=False).head(15)
     
@@ -388,7 +420,7 @@ with tab_top15:
         fig_skus = px.bar(
             df_top_sku, 
             x='capital_total', 
-            y='Descripcion', 
+            y='DESCRIPCION', 
             orientation='h',
             text_auto='.2s',
             color='tramo_rotacion', 
@@ -406,17 +438,16 @@ with tab_top15:
         
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 2. TOP 15 FAMILIAS
     st.markdown("<div class='section-header'>TOP 15 Familias por Capital</div>", unsafe_allow_html=True)
-    df_top_fam = df_filtrado.groupby(['Familia', 'tramo_rotacion'])['capital_total'].sum().reset_index()
-    top_fam_list = df_filtrado.groupby('Familia')['capital_total'].sum().nlargest(15).index
-    df_top_fam = df_top_fam[df_top_fam['Familia'].isin(top_fam_list)]
+    df_top_fam = df_filtrado.groupby(['FAMILIA', 'tramo_rotacion'])['capital_total'].sum().reset_index()
+    top_fam_list = df_filtrado.groupby('FAMILIA')['capital_total'].sum().nlargest(15).index
+    df_top_fam = df_top_fam[df_top_fam['FAMILIA'].isin(top_fam_list)]
     
     if not df_top_fam.empty:
         fig_fam = px.bar(
             df_top_fam, 
             x='capital_total', 
-            y='Familia', 
+            y='FAMILIA', 
             orientation='h',
             text_auto='.2s',
             color='tramo_rotacion',
@@ -434,17 +465,16 @@ with tab_top15:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # 3. TOP 15 SUBFAMILIAS
     st.markdown("<div class='section-header'>TOP 15 Subfamilias por Capital</div>", unsafe_allow_html=True)
-    df_top_sub = df_filtrado.groupby(['SubFamilia', 'tramo_rotacion'])['capital_total'].sum().reset_index()
-    top_sub_list = df_filtrado.groupby('SubFamilia')['capital_total'].sum().nlargest(15).index
-    df_top_sub = df_top_sub[df_top_sub['SubFamilia'].isin(top_sub_list)]
+    df_top_sub = df_filtrado.groupby(['SUBFAMILIA', 'tramo_rotacion'])['capital_total'].sum().reset_index()
+    top_sub_list = df_filtrado.groupby('SUBFAMILIA')['capital_total'].sum().nlargest(15).index
+    df_top_sub = df_top_sub[df_top_sub['SUBFAMILIA'].isin(top_sub_list)]
     
     if not df_top_sub.empty:
         fig_sub = px.bar(
             df_top_sub, 
             x='capital_total', 
-            y='SubFamilia', 
+            y='SUBFAMILIA', 
             orientation='h',
             text_auto='.2s',
             color='tramo_rotacion',
@@ -482,23 +512,22 @@ with tab_tabla:
     
     df_tabla = df_filtrado.copy()
     df_tabla_view = df_tabla[[
-        'Codigo', 'Descripcion', 'Almacen', 'Familia', 'SubFamilia', 
-        'Stock', 'Costo', 'capital_total', 'tramo_rotacion', 'dias_inactivo_hoy', 'max_gap_historico'
+        'CODIGO', 'DESCRIPCION', 'ALMACEN', 'FAMILIA', 'SUBFAMILIA', 
+        'STOCK', 'COSTO', 'capital_total', 'tramo_rotacion', 'dias_inactivo_hoy', 'max_gap_historico'
     ]].rename(columns={
-        'Codigo': 'SKU / Código',
-        'Descripcion': 'Descripción del Producto',
-        'Almacen': 'Almacén',
-        'Familia': 'Familia',
-        'SubFamilia': 'Subfamilia',
-        'Stock': 'Stock Físico',
-        'Costo': 'Costo U. (S/.)',
+        'CODIGO': 'SKU / Código',
+        'DESCRIPCION': 'Descripción del Producto',
+        'ALMACEN': 'Almacén',
+        'FAMILIA': 'Familia',
+        'SUBFAMILIA': 'Subfamilia',
+        'STOCK': 'Stock Físico',
+        'COSTO': 'Costo U. (S/.)',
         'capital_total': 'Capital Total (S/.)',
-        'tramo_rotacion': 'Roración',
+        'tramo_rotacion': 'Rotación',
         'dias_inactivo_hoy': 'Días Inactivo',
-        'max_gap_historico': 'Dias Maximos sin Salidas'
+        'max_gap_historico': 'Días Máximos sin Salidas'
     }).sort_values(by='Capital Total (S/.)', ascending=False)
     
-    # Formateo directo seguro
     df_tabla_view['Stock Físico'] = df_tabla_view['Stock Físico'].map('{:,.2f}'.format)
     df_tabla_view['Costo U. (S/.)'] = df_tabla_view['Costo U. (S/.)'].map('S/. {:,.2f}'.format)
     df_tabla_view['Capital Total (S/.)'] = df_tabla_view['Capital Total (S/.)'].map('S/. {:,.2f}'.format)

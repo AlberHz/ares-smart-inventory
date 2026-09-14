@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime
+import unicodedata
 import io
 
 import matplotlib.pyplot as plt
@@ -20,12 +21,12 @@ except ImportError:
     REPORTLAB_INSTALLED = False
 
 # ==============================================================================
-# CONFIGURACIÓN DE PÁGINA Y ESTILOS UI/UX CON TARJETAS KPI
+# CONFIGURACIÓN DE PÁGINA Y ESTILOS UI/UX
 # ==============================================================================
 st.set_page_config(
     layout="wide", 
     page_title="INFORME DE KPIS",
-    page_icon=""
+    page_icon="📊"
 )
 
 st.markdown("""
@@ -71,7 +72,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if 'df_stock' not in st.session_state or 'df_mov' not in st.session_state:
-    st.warning("Debe cargar los datos de origen (Stock y Movimientos) en la sesión.")
+    st.warning("⚠️ Debe cargar los datos de origen (Stock y Movimientos) en la pantalla de inicio.")
     st.stop()
 
 plt.rcParams['font.family'] = 'sans-serif'
@@ -82,6 +83,12 @@ COLOR_MEDIO = '#f59e0b'
 COLOR_BAJO = '#f97316'
 COLOR_CRITICO = '#b91c1c'
 
+def desacentuar_texto(texto):
+    if pd.isna(texto):
+        return ""
+    texto = str(texto).strip().upper()
+    return unicodedata.normalize('NFD', texto).encode('ascii', 'ignore').decode("utf-8")
+
 def obtener_colormap(nombre):
     try:
         return plt.colormaps.get_cmap(nombre)
@@ -89,98 +96,78 @@ def obtener_colormap(nombre):
         return plt.cm.get_cmap(nombre)
 
 def sanitizar_numerico(serie):
-    if serie is None or serie.empty: return pd.Series(dtype=float)
+    if serie is None or serie.empty: 
+        return pd.Series(dtype=float)
     return (
         serie.astype(str)
-        .str.replace('S/.', '', regex=False).str.replace('S/', '', regex=False)
-        .str.replace('$', '', regex=False).str.replace(',', '', regex=False).str.strip()
-        .pipe(pd.to_numeric, errors='coerce').fillna(0.0)
+        .str.replace('S/.', '', regex=False)
+        .str.replace('S/', '', regex=False)
+        .str.replace('$', '', regex=False)
+        .str.replace(',', '', regex=False)
+        .str.strip()
+        .pipe(pd.to_numeric, errors='coerce')
+        .fillna(0.0)
     )
 
+# ==============================================================================
+# PIPELINE Y PROCESAMIENTO GERENCIAL
+# ==============================================================================
 @st.cache_data(show_spinner="Sincronizando métricas gerenciales...")
 def procesar_datos_gerenciales(df_stock_raw, df_mov_raw, df_eri_raw=None):
+    df_stock_clean = df_stock_raw.copy()
+    df_mov_clean = df_mov_raw.copy()
+    
+    df_stock_clean.columns = [desacentuar_texto(c) for c in df_stock_clean.columns]
+    df_mov_clean.columns = [desacentuar_texto(c) for c in df_mov_clean.columns]
+
+    # Estructura del Stock
     df_s = pd.DataFrame()
-    df_s['Codigo'] = df_stock_raw['Codigo'].astype(str).str.strip().str.upper()
-    df_s['Descripcion'] = (
-        df_stock_raw['Descripcion'].astype(str).str.strip()
-        if 'Descripcion' in df_stock_raw.columns else 'SIN DESCRIPCION'
-    )
-    df_s['Almacen'] = (
-        df_stock_raw['Almacen'].astype(str).str.strip().str.upper()
-        if 'Almacen' in df_stock_raw.columns else 'GENERAL'
-    )
-    df_s['Familia'] = (
-        df_stock_raw['Familia'].astype(str).str.strip().str.upper()
-        if 'Familia' in df_stock_raw.columns else 'GENERAL'
-    )
-    df_s['SubFamilia'] = (
-        df_stock_raw['SubFamilia'].astype(str).str.strip().str.upper()
-        if 'SubFamilia' in df_stock_raw.columns else 'GENERAL'
-    )
-    df_s['Stock'] = sanitizar_numerico(
-        df_stock_raw['Stock'] if 'Stock' in df_stock_raw.columns else pd.Series(0, index=df_stock_raw.index)
-    )
-    df_s['Costo'] = sanitizar_numerico(
-        df_stock_raw['Costo'] if 'Costo' in df_stock_raw.columns else pd.Series(0, index=df_stock_raw.index)
-    )
+    df_s['Codigo'] = df_stock_clean['CODIGO'].astype(str).str.strip().str.upper() if 'CODIGO' in df_stock_clean.columns else 'SIN CODIGO'
+    
+    if 'DESCRIPCION' in df_stock_clean.columns:
+        df_s['Descripcion'] = df_stock_clean['DESCRIPCION'].astype(str).str.strip()
+    else:
+        cols_desc = [c for c in df_stock_clean.columns if 'DESC' in c or 'MAT' in c or 'PROD' in c]
+        df_s['Descripcion'] = df_stock_clean[cols_desc[0]].astype(str).str.strip() if cols_desc else 'SIN DESCRIPCION'
+
+    df_s['Almacen'] = df_stock_clean['ALMACEN'].astype(str).str.strip().str.upper() if 'ALMACEN' in df_stock_clean.columns else 'GENERAL'
+    df_s['Familia'] = df_stock_clean['FAMILIA'].astype(str).str.strip().str.upper() if 'FAMILIA' in df_stock_clean.columns else 'SIN CLASIFICAR'
+    df_s['SubFamilia'] = df_stock_clean['SUBFAMILIA'].astype(str).str.strip().str.upper() if 'SUBFAMILIA' in df_stock_clean.columns else 'GENERAL'
+    
+    df_s['Stock'] = sanitizar_numerico(df_stock_clean['STOCK'] if 'STOCK' in df_stock_clean.columns else pd.Series(0, index=df_stock_clean.index))
+    df_s['Costo'] = sanitizar_numerico(df_stock_clean['COSTO'] if 'COSTO' in df_stock_clean.columns else pd.Series(0, index=df_stock_clean.index))
 
     df_s = df_s[df_s['Stock'] > 0].copy().reset_index(drop=True)
     df_s['Valor_Total'] = df_s['Stock'] * df_s['Costo']
 
+    # Estructura de Movimientos
     df_m = pd.DataFrame()
-    df_m['Codigo'] = df_mov_raw['Codigo'].astype(str).str.strip().str.upper()
-    df_m['Almacen'] = (
-        df_mov_raw['Almacen'].astype(str).str.strip().str.upper()
-        if 'Almacen' in df_mov_raw.columns else 'GENERAL'
-    )
-    df_m['Tipo_Movimiento'] = (
-        df_mov_raw['Tipo_Movimiento'].astype(str).str.strip().str.upper()
-        if 'Tipo_Movimiento' in df_mov_raw.columns else ''
-    )
-    df_m['Transaccion'] = (
-        df_mov_raw['Transaccion'].astype(str).str.strip().str.upper()
-        if 'Transaccion' in df_mov_raw.columns else ''
-    )
-    df_m['Cantidad'] = sanitizar_numerico(
-        df_mov_raw['Cantidad'] if 'Cantidad' in df_mov_raw.columns else pd.Series(0, index=df_mov_raw.index)
-    )
+    df_m['Codigo'] = df_mov_clean['CODIGO'].astype(str).str.strip().str.upper() if 'CODIGO' in df_mov_clean.columns else 'SIN CODIGO'
+    df_m['Almacen'] = df_mov_clean['ALMACEN'].astype(str).str.strip().str.upper() if 'ALMACEN' in df_mov_clean.columns else 'GENERAL'
+    
+    cols_tipo = [c for c in df_mov_clean.columns if 'TIPO' in c or 'MOV' in c]
+    df_m['Tipo_Movimiento'] = df_mov_clean[cols_tipo[0]].astype(str).str.strip().str.upper() if cols_tipo else ''
+    
+    cols_cant = [c for c in df_mov_clean.columns if 'CANT' in c]
+    df_m['Cantidad'] = sanitizar_numerico(df_mov_clean[cols_cant[0]] if cols_cant else pd.Series(0, index=df_mov_clean.index))
 
-    if 'Fecha' in df_mov_raw.columns:
-        df_m['Fecha'] = pd.to_datetime(df_mov_raw['Fecha'], errors='coerce')
+    cols_fecha = [c for c in df_mov_clean.columns if 'FEC' in c or 'DATE' in c]
+    if cols_fecha:
+        df_m['Fecha'] = pd.to_datetime(df_mov_clean[cols_fecha[0]], dayfirst=True, errors='coerce')
         df_m['Mes_Mov'] = df_m['Fecha'].dt.strftime('%Y-%m')
-    elif 'Mes_Mov' in df_mov_raw.columns:
-        df_m['Fecha'] = pd.NaT
-        df_m['Mes_Mov'] = df_mov_raw['Mes_Mov'].astype(str)
     else:
         df_m['Fecha'] = pd.NaT
         df_m['Mes_Mov'] = '2026-08'
 
-    df_m['Entradas'] = np.where(df_m['Tipo_Movimiento'] == 'NI', df_m['Cantidad'], 0.0)
-    df_m['Salidas'] = np.where(df_m['Tipo_Movimiento'] == 'NS', df_m['Cantidad'], 0.0)
+    df_m['Entradas'] = np.where(df_m['Tipo_Movimiento'].str.contains('NI|INGRESO', regex=True, na=False), df_m['Cantidad'], 0.0)
+    df_m['Salidas'] = np.where(df_m['Tipo_Movimiento'].str.contains('NS|SALIDA|CONSUMO', regex=True, na=False), df_m['Cantidad'], 0.0)
 
-    ref_almacen = df_s.drop_duplicates('Codigo').set_index('Codigo')['Almacen'].to_dict()
-    ref_familia = df_s.drop_duplicates('Codigo').set_index('Codigo')['Familia'].to_dict()
-
-    df_m['Almacen_Ref'] = df_m['Codigo'].map(ref_almacen).fillna('')
-    df_m['Familia_Ref'] = df_m['Codigo'].map(ref_familia).fillna('')
-
-    df_m['es_mp'] = (
-        df_m['Almacen_Ref'].str.contains('MATERIA|MP|PRIMA', regex=True, na=False) |
-        df_m['Familia_Ref'].str.contains('MATERIA|MP|PRIMA', regex=True, na=False)
-    )
-
-    df_m['es_ingreso'] = df_m['Tipo_Movimiento'].str.contains('NI|INGRESO', regex=True, na=False)
-
-    salida_mp = (df_m['es_mp'] & df_m['Transaccion'].str.contains('TD', regex=True, na=False))
-    salida_otros = ((~df_m['es_mp']) & df_m['Tipo_Movimiento'].str.contains('NS|SALIDA', regex=True, na=False))
-    df_m['es_salida'] = salida_mp | salida_otros
-
-    df_ns = df_m[df_m['Tipo_Movimiento'] == 'NS']
+    # Agrupación y Clasificación ABC por Frecuencia de Salidas
+    df_ns = df_m[df_m['Salidas'] > 0]
     conteo_frecuencia = df_ns.groupby(['Codigo', 'Almacen']).size().reset_index(name='Volumen_Pedidos')
 
-    df_s = df_s.drop(columns=['Volumen_Pedidos'], errors='ignore')
     df_s = df_s.merge(conteo_frecuencia, on=['Codigo', 'Almacen'], how='left')
-    df_s['Volumen_Pedidos'] = pd.to_numeric(df_s['Volumen_Pedidos'], errors='coerce').fillna(0).astype(int)
+    df_s['Volumen_Pedidos'] = df_s['Volumen_Pedidos'].fillna(0).astype(int)
 
     df_s = df_s.sort_values(by=['Volumen_Pedidos', 'Valor_Total'], ascending=[False, False]).reset_index(drop=True)
     total_pedidos_global = df_s['Volumen_Pedidos'].sum()
@@ -202,34 +189,12 @@ def procesar_datos_gerenciales(df_stock_raw, df_mov_raw, df_eri_raw=None):
         df_s['Pedidos_Acum_Pct'] = 0.0
         df_s['Clase_ABC'] = 'C'
 
-    df_stock_hist = pd.DataFrame({
-        'Codigo': df_stock_raw['Codigo'].astype(str).str.strip().str.upper(),
-        'Descripcion': df_stock_raw['Descripcion'].astype(str).str.strip() if 'Descripcion' in df_stock_raw.columns else 'SIN DESCRIPCIÓN',
-        'Um': df_stock_raw['Um'].astype(str).str.strip() if 'Um' in df_stock_raw.columns else 'UM',
-        'Familia': df_stock_raw['Familia'].astype(str).str.strip().str.upper() if 'Familia' in df_stock_raw.columns else 'SIN CLASIFICAR',
-        'SubFamilia': df_stock_raw['SubFamilia'].astype(str).str.strip().str.upper() if 'SubFamilia' in df_stock_raw.columns else 'GENERAL',
-        'Almacen': df_stock_raw['Almacen'].astype(str).str.strip().str.upper() if 'Almacen' in df_stock_raw.columns else 'GENERAL',
-        'Stock': sanitizar_numerico(df_stock_raw['Stock'] if 'Stock' in df_stock_raw.columns else pd.Series(0, index=df_stock_raw.index)),
-        'Costo': sanitizar_numerico(df_stock_raw['Costo'] if 'Costo' in df_stock_raw.columns else pd.Series(0, index=df_stock_raw.index))
-    })
-
-    df_codigos_stock = df_stock_hist[['Codigo', 'Descripcion', 'Costo', 'Um', 'Familia', 'SubFamilia', 'Almacen', 'Stock']].copy()
-    df_codigos_mov = df_m[['Codigo', 'Almacen']].drop_duplicates().copy()
-    df_maestro_hist = pd.merge(df_codigos_stock, df_codigos_mov, on=['Codigo', 'Almacen'], how='outer', suffixes=('', '_mov'))
-    df_maestro_hist['Familia'] = df_maestro_hist['Familia'].fillna('SIN CLASIFICAR')
-    df_maestro_hist['SubFamilia'] = df_maestro_hist['SubFamilia'].fillna('GENERAL')
-    df_maestro_hist['Costo'] = pd.to_numeric(df_maestro_hist['Costo'], errors='coerce').fillna(0.0)
-    df_maestro_hist['Stock'] = pd.to_numeric(df_maestro_hist['Stock'], errors='coerce').fillna(0.0)
-    df_maestro_hist['Almacen'] = df_maestro_hist['Almacen'].fillna('GENERAL').astype(str).str.strip().str.upper()
-    df_maestro_hist['Codigo'] = df_maestro_hist['Codigo'].fillna('').astype(str).str.strip().str.upper()
-
+    # Evolutivo Histórico por Almacén
     meses_historicos = sorted([m_h for m_h in df_m['Mes_Mov'].dropna().astype(str).unique().tolist() if m_h.lower() != 'nan'])
-
-    costo_map = df_maestro_hist.groupby('Codigo')['Costo'].mean().to_dict()
-    stock_actual_agrupado = df_maestro_hist.groupby(['Codigo', 'Almacen'])['Stock'].sum().to_dict()
+    costo_map = df_s.groupby('Codigo')['Costo'].mean().to_dict()
+    stock_actual_agrupado = df_s.groupby(['Codigo', 'Almacen'])['Stock'].sum().to_dict()
 
     pivot_movs = df_m.groupby(['Mes_Mov', 'Codigo', 'Almacen'])[['Entradas', 'Salidas']].sum().reset_index()
-
     entradas_p = pivot_movs.pivot_table(index=['Codigo', 'Almacen'], columns='Mes_Mov', values='Entradas', aggfunc='sum').fillna(0)
     salidas_p = pivot_movs.pivot_table(index=['Codigo', 'Almacen'], columns='Mes_Mov', values='Salidas', aggfunc='sum').fillna(0)
 
@@ -237,104 +202,56 @@ def procesar_datos_gerenciales(df_stock_raw, df_mov_raw, df_eri_raw=None):
         if mes_h not in entradas_p.columns: entradas_p[mes_h] = 0.0
         if mes_h not in salidas_p.columns: salidas_p[mes_h] = 0.0
 
-    df_m_hist = df_m.copy()
-    df_m_hist['Es_Salida'] = (df_m_hist['Tipo_Movimiento'] == 'NS').astype(int)
-
-    combinaciones_maestro = df_maestro_hist.groupby(['Codigo', 'Almacen']).size().index
-    evol_global = []
+    combinaciones_maestro = df_s.groupby(['Codigo', 'Almacen']).size().index
     evol_almacen = []
 
     for mes_h in meses_historicos:
         meses_futuros = [m_f for m_f in meses_historicos if m_f > mes_h]
-
         ef_totales = entradas_p[meses_futuros].sum(axis=1).to_dict() if meses_futuros else {}
         sf_totales = salidas_p[meses_futuros].sum(axis=1).to_dict() if meses_futuros else {}
 
-        total_valor_mes = 0.0
-        total_unidades_mes = 0.0
-        stock_sku_acumulado = {}
         capital_por_almacen = {}
-
         for sku, alm in combinaciones_maestro:
             stk_act = stock_actual_agrupado.get((sku, alm), 0.0)
             ef = ef_totales.get((sku, alm), 0.0)
             sf = sf_totales.get((sku, alm), 0.0)
             stk_mes_alm = max(0.0, stk_act - ef + sf)
 
-            stock_sku_acumulado[sku] = stock_sku_acumulado.get(sku, 0.0) + stk_mes_alm
             costo = costo_map.get(sku, 0.0)
             capital_por_almacen[alm] = capital_por_almacen.get(alm, 0.0) + stk_mes_alm * costo
-
-        for sku in costo_map.keys():
-            stk_final_sku = stock_sku_acumulado.get(sku, 0.0)
-            costo_sku = costo_map.get(sku, 0.0)
-
-            total_unidades_mes += stk_final_sku
-            total_valor_mes += stk_final_sku * costo_sku
-
-        evol_global.append({'Mes': mes_h, 'Capital': total_valor_mes, 'Volumen_Unidades': total_unidades_mes})
 
         for alm, cap in capital_por_almacen.items():
             evol_almacen.append({'Mes': mes_h, 'Almacen': alm, 'Capital': cap})
 
     df_evol = pd.DataFrame(evol_almacen)
 
-    base = df_s.copy()
+    # Lógica de Inmovilizados
     fecha_hoy = pd.Timestamp(datetime.date.today())
-
-    m_valid = df_m[(df_m['es_ingreso'] | df_m['es_salida']) & df_m['Fecha'].notnull()].copy()
+    m_valid = df_m[df_m['Fecha'].notnull()].copy()
 
     if m_valid.empty:
-        base['f_ult_ingreso'] = pd.NaT
-        base['f_ult_salida'] = pd.NaT
-        base['dias_inactivo_hoy'] = 999.0
-        base['max_gap_historico'] = 0.0
-        base['gap_efectivo'] = 999.0
-        base['es_espejismo'] = False
+        df_s['f_ult_salida'] = pd.NaT
+        df_s['dias_inactivo_hoy'] = 999.0
     else:
-        s_ingresos = m_valid[m_valid['es_ingreso']].groupby('Codigo')['Fecha'].max()
-        s_salidas = m_valid[m_valid['es_salida']].groupby('Codigo')['Fecha'].max()
+        s_salidas = m_valid[m_valid['Salidas'] > 0].groupby('Codigo')['Fecha'].max()
+        df_s['f_ult_salida'] = df_s['Codigo'].map(s_salidas)
+        dias_inact = (fecha_hoy - df_s['f_ult_salida']).dt.days
+        df_s['dias_inactivo_hoy'] = dias_inact.fillna(999)
 
-        m_sorted = m_valid.sort_values(['Codigo', 'Fecha']).copy()
-        m_sorted['gap'] = m_sorted.groupby('Codigo')['Fecha'].diff().dt.days
-        s_max_gap = m_sorted.groupby('Codigo')['gap'].max().fillna(0)
-
-        base['f_ult_ingreso'] = base['Codigo'].map(s_ingresos)
-        base['f_ult_salida'] = base['Codigo'].map(s_salidas)
-        base['max_gap_historico'] = base['Codigo'].map(s_max_gap).fillna(0)
-
-        f_ref = base['f_ult_salida'].combine_first(base['f_ult_ingreso'])
-        dias_inact = (fecha_hoy - f_ref).dt.days
-
-        base['dias_inactivo_hoy'] = dias_inact.fillna(999)
-        base['gap_efectivo'] = np.maximum(base['dias_inactivo_hoy'], base['max_gap_historico'])
-
-        base['es_espejismo'] = (
-            base['f_ult_salida'].notnull() &
-            (base['dias_inactivo_hoy'] < 90) &
-            (base['max_gap_historico'] >= 180)
-        )
-
-    conds = [
-        base['gap_efectivo'] < 90,
-        (base['gap_efectivo'] >= 90) & (base['gap_efectivo'] < 180),
-        (base['gap_efectivo'] >= 180) & (base['gap_efectivo'] < 270)
+    conds_inmov = [
+        df_s['dias_inactivo_hoy'] < 90,
+        (df_s['dias_inactivo_hoy'] >= 90) & (df_s['dias_inactivo_hoy'] < 180),
+        (df_s['dias_inactivo_hoy'] >= 180) & (df_s['dias_inactivo_hoy'] < 270)
     ]
-    choices = [
+    choices_inmov = [
         '1 a 3 Meses (Rotación Activa)',
         '3 a 6 Meses (Rotación Media)',
         '6 a 9 Meses (Rotación Baja / Riesgo)'
     ]
-    base['Tramo_Inmovilizado'] = np.select(
-        conds,
-        choices,
-        default='9 a Más Meses (Inmovilizado Crítico)'
-    )
-    base['Capital_Total'] = base['Stock'] * base['Costo']
-    base['Valor_Total'] = base['Capital_Total']
+    df_s['Tramo_Inmovilizado'] = np.select(conds_inmov, choices_inmov, default='9 a Más Meses (Inmovilizado Crítico)')
+    df_s['Capital_Total'] = df_s['Stock'] * df_s['Costo']
 
-    df_s = base
-
+    # Métricas Globales
     total_capital = df_s['Capital_Total'].sum()
     total_unidades = df_s['Stock'].sum()
     total_skus = df_s['Codigo'].nunique()
@@ -388,8 +305,11 @@ def procesar_datos_gerenciales(df_stock_raw, df_mov_raw, df_eri_raw=None):
     top30_skus = df_s[df_s['Stock'] > 0].sort_values('Capital_Total', ascending=False).head(30)
     top30_inmov = df_s[(df_s['Stock'] > 0) & (df_s['Tramo_Inmovilizado'] == '9 a Más Meses (Inmovilizado Crítico)')].sort_values('Capital_Total', ascending=False).head(30)
 
+    # Indicador ERI
     if df_eri_raw is not None and not df_eri_raw.empty:
         df_e = df_eri_raw.copy()
+        df_e.columns = [desacentuar_texto(c) for c in df_e.columns]
+        
         if 'ALMACEN' in df_e.columns:
             df_e = df_e[~df_e['ALMACEN'].astype(str).str.upper().isin(['OBSERVADOS', 'DESINVENTARIO', 'MUESTRAS'])]
         df_e['ES_EXACTO'] = ((df_e['DIFERENCIA'] == 0).astype(int) if 'DIFERENCIA' in df_e.columns else 1)
@@ -437,9 +357,8 @@ df_eri_sesion = st.session_state.get('df_eri_base', st.session_state.get('df_eri
 m = procesar_datos_gerenciales(st.session_state['df_stock'], st.session_state['df_mov'], df_eri_sesion)
 
 # ==============================================================================
-# RENDERIZADO DE GRÁFICOS
+# FUNCIONES DE GENERACIÓN DE GRÁFICOS
 # ==============================================================================
-
 def generar_grafico_evolucion_global(df_evol):
     fig, ax = plt.subplots(figsize=(8.5, 2.3), dpi=250)
     df_tot = df_evol.groupby('Mes')['Capital'].sum().reset_index().sort_values('Mes')
@@ -465,7 +384,7 @@ def generar_grafico_evolucion_global(df_evol):
 def generar_grafico_almacen_individual(df_evol, nombre_almacen):
     fig, ax = plt.subplots(figsize=(8.5, 2.1), dpi=250)
     sub = df_evol[df_evol['Almacen'] == nombre_almacen].sort_values('Mes')
-    colores_map = {'MATERIA_PRIMA': '#0284c7', 'SUMINISTROS': '#ec4899', 'OBSERVADOS': '#10b981', 'GENERAL': '#64748b'}
+    colores_map = {'MATERIA PRIMA': '#0284c7', 'SUMINISTROS': '#ec4899', 'OBSERVADOS': '#10b981', 'GENERAL': '#64748b'}
     c = colores_map.get(str(nombre_almacen), '#0d9488')
     ax.plot(sub['Mes'], sub['Capital'] / 1e6, marker='o', linestyle='-', linewidth=2, markersize=4.5, color=c)
     for _, r in sub.iterrows():
@@ -515,7 +434,7 @@ def generar_graficos_eri_reestructurado(df_eri_hist, df_eri_alm, res_alm):
     colores_pie = ['#0284c7', '#ec4899', '#10b981', '#f59e0b']
     ax3.pie(res_alm['Capital'], labels=res_alm['Almacen'], autopct='%1.1f%%', pctdistance=0.7, labeldistance=1.15, startangle=140, colors=colores_pie[:len(res_alm)], textprops=dict(fontsize=5, weight='bold'))
     ax3.add_artist(plt.Circle((0,0), 0.5, fc='white'))
-    ax3.set_title(" Porcentaje del Capital por Almacén", fontsize=7.5, fontweight='bold')
+    ax3.set_title("Porcentaje del Capital por Almacén", fontsize=7.5, fontweight='bold')
 
     plt.tight_layout()
     buf = io.BytesIO()
@@ -526,15 +445,15 @@ def generar_graficos_eri_reestructurado(df_eri_hist, df_eri_alm, res_alm):
 
 def generar_grafico_top_skus_amplio_30(df_skus, titulo, color_map):
     fig, ax = plt.subplots(figsize=(8.5, 6.0), dpi=250)
-    top_sorted = df_skus.sort_values(by='Valor_Total', ascending=True).tail(30)
+    top_sorted = df_skus.sort_values(by='Capital_Total', ascending=True).tail(30)
     
     labels = []
     for _, r in top_sorted.iterrows():
         desc = str(r['Descripcion'])
-        if len(desc) > 60: desc = desc[:57] + "..."
+        if len(desc) > 50: desc = desc[:47] + "..."
         labels.append(f"[{r['Codigo']}] {desc}")
 
-    valores = top_sorted['Valor_Total'].to_numpy() / 1e3
+    valores = top_sorted['Capital_Total'].to_numpy() / 1e3
     cmap = obtener_colormap(color_map)
     colors_bar = cmap(np.linspace(0.35, 0.9, len(valores)))
     bars = ax.barh(labels, valores, color=colors_bar, height=0.72)
@@ -609,23 +528,11 @@ def generar_grafico_abc_por_almacen(df_abc_alm):
                         fontsize=4.7, fontweight='bold', color='#0f172a'
                     )
 
-        ax.set_title(
-            "CLASIFICACIÓN ABC POR ALMACÉN",
-            fontsize=8.2, fontweight='bold', color='#0f172a', pad=23
-        )
+        ax.set_title("CLASIFICACIÓN ABC POR ALMACÉN", fontsize=8.2, fontweight='bold', color='#0f172a', pad=23)
         ax.set_ylabel("Capital (S/. M)", fontsize=6.5, fontweight='bold')
         ax.set_xticks(x)
         ax.set_xticklabels(almacenes, fontsize=6, fontweight='bold')
-        ax.legend(
-            bbox_to_anchor=(0.5, 1.01),
-            loc='lower center',
-            ncol=3,
-            fontsize=5.5,
-            frameon=True,
-            borderpad=0.35,
-            handlelength=1.4,
-            columnspacing=1.2
-        )
+        ax.legend(bbox_to_anchor=(0.5, 1.01), loc='lower center', ncol=3, fontsize=5.5, frameon=True, borderpad=0.35, handlelength=1.4, columnspacing=1.2)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.grid(axis='y', linestyle='--', alpha=0.3)
@@ -720,16 +627,9 @@ def generar_grafico_rotacion_almacen_fidelizado(df_inmov):
 
         ax.set_yticks(y)
         ax.set_yticklabels(almacenes, fontsize=6.2, fontweight='bold')
-        ax.set_title(
-            "VALOR DE TRAMOS DE INMOVILIZACIÓN POR ALMACÉN",
-            fontsize=8.5, fontweight='bold', loc='left', color='#0f172a', pad=22
-        )
+        ax.set_title("VALOR DE TRAMOS DE INMOVILIZACIÓN POR ALMACÉN", fontsize=8.5, fontweight='bold', loc='left', color='#0f172a', pad=22)
         ax.set_xlabel("Capital Valorizado (S/. M)", fontsize=6.5, fontweight='bold')
-        ax.legend(
-            bbox_to_anchor=(0.5, 1.01), loc='lower center', ncol=4,
-            fontsize=4.8, frameon=False, handlelength=1.2,
-            columnspacing=0.9
-        )
+        ax.legend(bbox_to_anchor=(0.5, 1.01), loc='lower center', ncol=4, fontsize=4.8, frameon=False, handlelength=1.2, columnspacing=0.9)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.grid(axis='x', linestyle='--', alpha=0.3)
@@ -816,16 +716,9 @@ def generar_grafico_top15_familias(df_fam):
 
         ax.set_yticks(y)
         ax.set_yticklabels(familias, fontsize=5.5)
-        ax.set_title(
-            "FAMILIAS POR TRAMO DE INMOVILIZACIÓN",
-            fontsize=8.2, fontweight='bold', loc='left', color='#0f172a', pad=22
-        )
+        ax.set_title("FAMILIAS POR TRAMO DE INMOVILIZACIÓN", fontsize=8.2, fontweight='bold', loc='left', color='#0f172a', pad=22)
         ax.set_xlabel("Capital Valorizado (S/. M)", fontsize=6.5, fontweight='bold')
-        ax.legend(
-            bbox_to_anchor=(0.5, 1.01), loc='lower center', ncol=4,
-            fontsize=4.7, frameon=False, handlelength=1.2,
-            columnspacing=0.9
-        )
+        ax.legend(bbox_to_anchor=(0.5, 1.01), loc='lower center', ncol=4, fontsize=4.7, frameon=False, handlelength=1.2, columnspacing=0.9)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.grid(axis='x', linestyle='--', alpha=0.3)
@@ -839,9 +732,8 @@ def generar_grafico_top15_familias(df_fam):
     return buf
 
 # ==============================================================================
-# GENERACIÓN DEL PDF GERENCIAL RESTRUCTURADO
+# GENERACIÓN DE PDF
 # ==============================================================================
-
 def generar_pdf_gerencial(m, periodo, autor, destinatario):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -853,13 +745,10 @@ def generar_pdf_gerencial(m, periodo, autor, destinatario):
     title_style = ParagraphStyle('T1', fontName='Helvetica-Bold', fontSize=11, leading=13, textColor=colors.HexColor('#0f172a'))
     sub_style = ParagraphStyle('S1', fontName='Helvetica', fontSize=6.5, leading=8.5, textColor=colors.HexColor('#475569'))
     h1_style = ParagraphStyle('H1', fontName='Helvetica-Bold', fontSize=8, leading=9.5, textColor=colors.HexColor('#0f172a'), spaceBefore=3, spaceAfter=2)
-    card_title_style = ParagraphStyle('CT', fontName='Helvetica-Bold', fontSize=6.5, leading=7.5, textColor=colors.HexColor('#0f172a'))
-    card_val_style = ParagraphStyle('CV', fontName='Helvetica-Bold', fontSize=6, leading=7, textColor=colors.HexColor('#0284c7'))
 
     elements = []
-    
     elements.append(Paragraph("INFORME DE KPIS DE INVENTARIOS", title_style))
-    elements.append(Paragraph(f"<b>Periodo:</b> {periodo} | <b>Elaborado por:</b> ALBER HERNANDEZ | <b>Dirigido a:</b> GERENCIA GENERAL", sub_style))
+    elements.append(Paragraph(f"<b>Periodo:</b> {periodo} | <b>Elaborado por:</b> ARES PERU SAC | <b>Dirigido a:</b> GERENCIA GENERAL", sub_style))
     elements.append(HRFlowable(width="100%", thickness=1.0, color=colors.HexColor('#0f172a'), spaceAfter=4))
 
     # HOJA 1
@@ -937,7 +826,7 @@ def generar_pdf_gerencial(m, periodo, autor, destinatario):
 
     elements.append(PageBreak())
 
-    # HOJA 4: SECCIÓN 9 Y MATRIZ MÁSTER EN PDF
+    # HOJA 4
     elements.append(Paragraph("9. ROTACIÓN Y TRAMOS POR ALMACÉN", h1_style))
     elements.append(Image(generar_grafico_rotacion_almacen_fidelizado(m['res_inmov_alm']), width=540, height=180))
     elements.append(Spacer(1, 4))
@@ -1001,9 +890,8 @@ def generar_pdf_gerencial(m, periodo, autor, destinatario):
     return buffer
 
 # ==============================================================================
-# VISTA STREAMLIT CON INTEGRACIÓN COMPLETA DE TARJETAS Y MONTOS POR TRAMO
+# VISTA STREAMLIT
 # ==============================================================================
-
 st.title("INFORME DE KPIS DE INVENTARIO")
 st.markdown("---")
 
@@ -1049,7 +937,7 @@ with k1:
     <div class='kpi-card'>
         <div class='kpi-title'>1-3 Meses (Rotación Activa)</div>
         <div class='kpi-value' style='color:#10b981;'>S/. {m['monto_activa']:,.2f}</div>
-        <div class='kpi-sub' style='color:#10b981;'>{pct_activa:.1f}% - Capital con flujo constante</div>
+        <div class='kpi-sub' style='color:#10b981;'>{pct_activa:.1f}% - Flujo constante</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1058,7 +946,7 @@ with k2:
     <div class='kpi-card'>
         <div class='kpi-title'>3-6 Meses (Rotación Media)</div>
         <div class='kpi-value' style='color:#f59e0b;'>S/. {m['monto_media']:,.2f}</div>
-        <div class='kpi-sub' style='color:#f59e0b;'>{pct_media:.1f}% - Rotación regular en observación</div>
+        <div class='kpi-sub' style='color:#f59e0b;'>{pct_media:.1f}% - Observación regular</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1067,7 +955,7 @@ with k3:
     <div class='kpi-card'>
         <div class='kpi-title'>6-9 Meses (Riesgo Próximo)</div>
         <div class='kpi-value' style='color:#f97316;'>S/. {m['monto_riesgo']:,.2f}</div>
-        <div class='kpi-sub' style='color:#f97316;'>{pct_riesgo:.1f}% - Futuro inmovilizado si no se liquida</div>
+        <div class='kpi-sub' style='color:#f97316;'>{pct_riesgo:.1f}% - Alerta de acumulación</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1076,13 +964,13 @@ with k4:
     <div class='kpi-card'>
         <div class='kpi-title'>Inmovilizado Crítico (> 9 Meses)</div>
         <div class='kpi-value' style='color:#b91c1c;'>S/. {m['monto_critico']:,.2f}</div>
-        <div class='kpi-sub' style='color:#b91c1c;'>{pct_critico:.1f}% - Capital inmovilizado severo</div>
+        <div class='kpi-sub' style='color:#b91c1c;'>{pct_critico:.1f}% - Inmovilizado severo</div>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-st.subheader("Cuadro Pareto Operativo (Sustento de la Clasificación Dashboard por Salidas NS)")
+st.subheader("Cuadro Pareto Operativo")
 st.dataframe(m['res_pareto_operativo'].style.format({
     'SKUs': '{:,}',
     'Pct_SKUs': '{:.1f}%',
@@ -1109,9 +997,6 @@ with g1:
 with g2:
     st.image(generar_grafico_top_skus_amplio_30(m['top30_inmov'], "Top 30 SKUs Sin Rotación", "viridis"), use_container_width=True)
 
-# ==============================================================================
-# 9. ROTACIÓN Y TRAMOS POR ALMACÉN (LÓGICA ACTUALIZADA)
-# ==============================================================================
 st.subheader("9. Rotación y Tramos por Almacén")
 st.image(generar_grafico_rotacion_almacen_fidelizado(m['res_inmov_alm']), use_container_width=True)
 
@@ -1124,7 +1009,6 @@ orden_tramos = [
     '9 a Más Meses (Inmovilizado Crítico)'
 ]
 
-# Matriz completa con todos los tramos por almacén
 df_tramos_alm = m['df_s'].pivot_table(
     index='Almacen',
     columns='Tramo_Inmovilizado',
@@ -1158,20 +1042,6 @@ df_master_view = pd.DataFrame({
 
 st.dataframe(df_master_view, use_container_width=True, hide_index=True)
 
-st.markdown("<div class='section-header'>DETALLE MÁSTER EN TARJETAS DE INMOVILIZACIÓN POR ALMACÉN</div>", unsafe_allow_html=True)
-cols = st.columns(len(m['res_alm']))
-for idx, (_, r) in enumerate(m['res_alm'].iterrows()):
-    with cols[idx]:
-        st.markdown(f"""
-        <div class='kpi-card'>
-            <div class='kpi-title'>ALMACÉN: {r['Almacen']}</div>
-            <div class='kpi-value' style='font-size:1.1rem;'>S/. {r['Capital']:,.2f}</div>
-            <div class='kpi-sub'><b>SKUs:</b> {r['SKUs']:,}</div>
-            <div class='kpi-sub'><b>Unidades:</b> {r['Stock_Unidades']:,.0f}</div>
-            <div class='kpi-sub' style='color:#0284c7;'><b>% Total:</b> {r['Pct_Capital']:.1f}%</div>
-        </div>
-        """, unsafe_allow_html=True)
-
 st.subheader("10. Top 15 Familias por Capital (Desglose de Rotación)")
 st.image(generar_grafico_top15_familias(m['res_inmov_fam']), use_container_width=True)
 
@@ -1180,14 +1050,14 @@ if REPORTLAB_INSTALLED:
     pdf_bytes = generar_pdf_gerencial(
         m, 
         f"Cierre {datetime.date.today().strftime('%B %Y')}", 
-        "Jefatura de Analítica & Cadena de Suministro", 
-        "Gerencia General / Dirección Financiera"
+        "Ares Peru SAC", 
+        "Gerencia General"
     )
     
     st.download_button(
-        label="📥 DESCARGAR INFORME GERENCIAL",
+        label="📥 DESCARGAR INFORME GERENCIAL (PDF)",
         data=pdf_bytes,
-        file_name=f"Informe_Gerencial_Inventario_Corregido_{datetime.date.today()}.pdf",
+        file_name=f"Informe_Gerencial_Inventario_{datetime.date.today()}.pdf",
         mime="application/pdf",
         use_container_width=True
     )
